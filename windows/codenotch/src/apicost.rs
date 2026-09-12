@@ -9,6 +9,11 @@
 //!   - OpenAI:    GET https://api.openai.com/v1/organization/costs?start_time=<unix>&bucket_width=1d&limit=31&group_by[]=line_item
 //!                header Authorization: Bearer <sk-admin-…>
 //!                reply: { data:[{start_time, end_time, results:[{amount:{value:<number, USD>, currency}, line_item}]}], has_more, next_page }
+//!   - xAI:       POST https://management-api.x.ai/v1/billing/teams/{team_id}/usage  (management key, Bearer)
+//!                body { analyticsRequest:{ timeRange:{startTime:"YYYY-MM-DD HH:MM:SS", endTime, timezone:"Etc/GMT"}, timeUnit:"TIME_UNIT_DAY",
+//!                       values:[{name:"usd", aggregation:"AGGREGATION_SUM"}], groupBy:["description"], filters:[] } }
+//!                reply: { timeSeries:[{group:["Chat grok-4"], dataPoints:[{timestamp:"…Z", values:[<USD>]}]}], limitReached }
+//!                The team id comes from GET /auth/management-keys/validation (teamId / scopeId) when not entered by hand.
 //!
 //! The cell shows month-to-date spend. With a monthly budget set in Settings the ring fills as a
 //! share of that budget; without one the ring stays empty and only the dollar figure is shown.
@@ -52,6 +57,7 @@ fn now_ms() -> u64 {
 pub enum Vendor {
     Anthropic,
     OpenAi,
+    Xai,
 }
 
 impl Vendor {
@@ -59,18 +65,21 @@ impl Vendor {
         match self {
             Vendor::Anthropic => "anthropic_api",
             Vendor::OpenAi => "openai_api",
+            Vendor::Xai => "xai_api",
         }
     }
     pub fn label(self) -> &'static str {
         match self {
             Vendor::Anthropic => "Anthropic API",
             Vendor::OpenAi => "OpenAI API",
+            Vendor::Xai => "xAI API",
         }
     }
     fn store_name(self) -> &'static str {
         match self {
             Vendor::Anthropic => "anthropic_api.json",
             Vendor::OpenAi => "openai_api.json",
+            Vendor::Xai => "xai_api.json",
         }
     }
 }
@@ -110,7 +119,76 @@ fn settings_from(c: &crate::config::Config, v: Vendor) -> (String, f64) {
     match v {
         Vendor::Anthropic => (c.anthropic_admin_key.trim().to_string(), c.anthropic_budget_usd),
         Vendor::OpenAi => (c.openai_admin_key.trim().to_string(), c.openai_budget_usd),
+        Vendor::Xai => (c.xai_management_key.trim().to_string(), c.xai_budget_usd),
     }
+}
+
+/// xAI needs a team id in the path. Hand-entered wins; otherwise the key describes itself.
+fn xai_team_id(app: Option<&AppHandle>, key: &str) -> Result<String, FetchErr> {
+    let typed = match app {
+        Some(a) => {
+            let st = a.state::<AppState>();
+            let c = st.cfg.lock().unwrap();
+            c.xai_team_id.trim().to_string()
+        }
+        None => crate::config::load().xai_team_id.trim().to_string(),
+    };
+    if !typed.is_empty() {
+        return Ok(typed);
+    }
+    let v = get_json(
+        ureq::get("https://management-api.x.ai/auth/management-keys/validation")
+            .set("authorization", &format!("Bearer {key}"))
+            .set("user-agent", "codenotch-windows"),
+    )?;
+    ["scopeId", "teamId"]
+        .iter()
+        .find_map(|k| v.get(*k).and_then(|x| x.as_str()).filter(|x| !x.is_empty()).map(|x| x.to_string()))
+        .ok_or_else(|| FetchErr::Other("management key validated but reports no team id — enter it in Settings → API spend".into()))
+}
+
+fn xai_local_ts(secs: u64) -> String {
+    let (y, m, d) = ymd_utc(secs);
+    let rem = secs % 86_400;
+    format!("{y:04}-{m:02}-{d:02} {:02}:{:02}:{:02}", rem / 3600, (rem % 3600) / 60, rem % 60)
+}
+
+/// xAI's usage report is one time series per description, each dense over the range; fold them
+/// into one bucket per day.
+fn parse_xai(v: &serde_json::Value) -> Vec<Bucket> {
+    let mut out: Vec<Bucket> = Vec::new();
+    let Some(series) = v.get("timeSeries").and_then(|s| s.as_array()) else { return out };
+    for ts in series {
+        let name = ts
+            .get("groupLabels")
+            .or_else(|| ts.get("group"))
+            .and_then(|g| g.as_array())
+            .and_then(|g| g.first())
+            .and_then(|g| g.as_str())
+            .unwrap_or("other")
+            .to_string();
+        let Some(points) = ts.get("dataPoints").and_then(|p| p.as_array()) else { continue };
+        for p in points {
+            let start = p.get("timestamp").and_then(|t| t.as_str()).and_then(parse_rfc3339_secs).unwrap_or(0);
+            let usd = p.get("values").and_then(|x| x.as_array()).and_then(|x| x.first()).and_then(|x| x.as_f64()).unwrap_or(0.0);
+            if usd == 0.0 {
+                continue;
+            }
+            let b = match out.iter_mut().find(|b| b.start_secs == start) {
+                Some(b) => b,
+                None => {
+                    out.push(Bucket { start_secs: start, ..Default::default() });
+                    out.last_mut().unwrap()
+                }
+            };
+            b.usd += usd;
+            match b.lines.iter_mut().find(|(n, _)| *n == name) {
+                Some((_, acc)) => *acc += usd,
+                None => b.lines.push((name.clone(), usd)),
+            }
+        }
+    }
+    out
 }
 
 /// Civil date from a unix timestamp (UTC). Enough calendar for "first of this month" and
@@ -187,6 +265,7 @@ pub struct Bucket {
 /// field; OpenAI only a `line_item` such as "gpt-4o-mini, input" — the part before the comma.
 fn line_name(vendor: Vendor, r: &serde_json::Value) -> String {
     match vendor {
+        Vendor::Xai => "other".into(),
         Vendor::Anthropic => r
             .get("model")
             .and_then(|m| m.as_str())
@@ -210,6 +289,7 @@ fn parse_buckets(vendor: Vendor, v: &serde_json::Value) -> Vec<Bucket> {
         let start_secs = match vendor {
             Vendor::Anthropic => b.get("starting_at").and_then(|s| s.as_str()).and_then(parse_rfc3339_secs),
             Vendor::OpenAi => b.get("start_time").and_then(|s| s.as_u64()),
+            Vendor::Xai => None, // never reaches here: see parse_xai
         }
         .unwrap_or(0);
         let mut bucket = Bucket { start_secs, ..Default::default() };
@@ -228,6 +308,7 @@ fn parse_buckets(vendor: Vendor, v: &serde_json::Value) -> Vec<Bucket> {
                         .and_then(|a| a.get("value"))
                         .and_then(|x| x.as_f64())
                         .unwrap_or(0.0),
+                    Vendor::Xai => 0.0,
                 };
                 bucket.usd += usd;
                 let name = line_name(vendor, r);
@@ -263,6 +344,9 @@ fn get_json(req: ureq::Request) -> Result<serde_json::Value, FetchErr> {
 
 /// Every daily bucket from the start of the month to now, following pagination.
 pub fn fetch_month(vendor: Vendor, key: &str, month_start: u64, month_next: u64) -> Result<Vec<Bucket>, FetchErr> {
+    if vendor == Vendor::Xai {
+        return fetch_month_xai(None, key, month_start, month_next);
+    }
     let mut all = Vec::new();
     let mut page: Option<String> = None;
     for _ in 0..4 {
@@ -296,6 +380,7 @@ pub fn fetch_month(vendor: Vendor, key: &str, month_start: u64, month_next: u64)
                 }
                 r
             }
+            Vendor::Xai => unreachable!("xAI is fetched by fetch_month_xai"),
         };
         let v = get_json(req)?;
         all.extend(parse_buckets(vendor, &v));
@@ -306,6 +391,37 @@ pub fn fetch_month(vendor: Vendor, key: &str, month_start: u64, month_next: u64)
         }
     }
     Ok(all)
+}
+
+fn fetch_month_xai(app: Option<&AppHandle>, key: &str, month_start: u64, month_next: u64) -> Result<Vec<Bucket>, FetchErr> {
+    let team = xai_team_id(app, key)?;
+    let body = serde_json::json!({
+        "analyticsRequest": {
+            "timeRange": { "startTime": xai_local_ts(month_start), "endTime": xai_local_ts(month_next), "timezone": "Etc/GMT" },
+            "timeUnit": "TIME_UNIT_DAY",
+            "values": [ { "name": "usd", "aggregation": "AGGREGATION_SUM" } ],
+            "groupBy": [ "description" ],
+            "filters": []
+        }
+    });
+    let req = ureq::post(&format!("https://management-api.x.ai/v1/billing/teams/{team}/usage"))
+        .set("authorization", &format!("Bearer {key}"))
+        .set("content-type", "application/json")
+        .set("user-agent", "codenotch-windows")
+        .timeout(HTTP_TIMEOUT);
+    let v = match req.send_string(&body.to_string()) {
+        Ok(r) => r.into_json::<serde_json::Value>().map_err(|e| FetchErr::Other(format!("bad JSON: {e}")))?,
+        Err(ureq::Error::Status(401, _)) | Err(ureq::Error::Status(403, _)) => {
+            return Err(FetchErr::NeedsAuth("Management key rejected (401/403) — check it in Settings → API spend".into()))
+        }
+        Err(ureq::Error::Status(code, r)) => {
+            let body = r.into_string().unwrap_or_default();
+            let short: String = body.chars().take(160).collect();
+            return Err(FetchErr::Other(format!("HTTP {code} {short}")));
+        }
+        Err(e) => return Err(FetchErr::Other(format!("network: {e}"))),
+    };
+    Ok(parse_xai(&v))
 }
 
 fn fmt_usd(x: f64) -> String {
@@ -379,7 +495,8 @@ fn read_once(app: &AppHandle, vendor: Vendor, prev: &UsageSnapshot) -> UsageSnap
     }
     let now = now_ms() / 1000;
     let (start, next, today) = month_bounds(now);
-    match fetch_month(vendor, &key, start, next) {
+    let fetched = if vendor == Vendor::Xai { fetch_month_xai(Some(app), &key, start, next) } else { fetch_month(vendor, &key, start, next) };
+    match fetched {
         Ok(buckets) => snapshot_from(&buckets, budget, next, today),
         Err(FetchErr::NeedsAuth(msg)) => UsageSnapshot { status: "needsAuth".into(), note: msg, fetched_at: now_ms(), ..Default::default() },
         Err(FetchErr::Other(msg)) => {
@@ -397,6 +514,7 @@ fn broadcast(app: &AppHandle, vendor: Vendor, snap: UsageSnapshot) {
         let slot = match vendor {
             Vendor::Anthropic => &st.anthropic_api,
             Vendor::OpenAi => &st.openai_api,
+            Vendor::Xai => &st.xai_api,
         };
         *slot.lock().unwrap() = snap.clone();
     }
@@ -413,6 +531,7 @@ pub fn start(app: AppHandle, vendor: Vendor) {
             match vendor {
                 Vendor::Anthropic => st.anthropic_api.lock().unwrap().clone(),
                 Vendor::OpenAi => st.openai_api.lock().unwrap().clone(),
+                Vendor::Xai => st.xai_api.lock().unwrap().clone(),
             }
         };
         let snap = read_once(&app, vendor, &prev);
@@ -452,6 +571,26 @@ pub fn probe(vendor: Vendor) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn xai_series_fold_into_daily_buckets() {
+        let v: serde_json::Value = serde_json::from_str(
+            r#"{"timeSeries":[
+              {"group":["Chat grok-4"],"groupLabels":["Chat grok-4"],"dataPoints":[{"timestamp":"2026-09-01T00:00:00Z","values":[0.75]},{"timestamp":"2026-09-02T00:00:00Z","values":[0]}]},
+              {"group":["Image grok-imagine"],"groupLabels":["Image grok-imagine"],"dataPoints":[{"timestamp":"2026-09-01T00:00:00Z","values":[0.25]},{"timestamp":"2026-09-02T00:00:00Z","values":[1.5]}]}
+            ],"limitReached":false}"#,
+        )
+        .unwrap();
+        let b = parse_xai(&v);
+        assert_eq!(b.len(), 2);
+        assert!((b[0].usd - 1.0).abs() < 1e-9);
+        assert!((b[1].usd - 1.5).abs() < 1e-9);
+        let s = snapshot_from(&b, 10.0, 0, b[1].start_secs);
+        assert_eq!(s.windows[0].text.as_deref(), Some("$2.50"));
+        assert_eq!(s.windows[1].text.as_deref(), Some("$1.50"));
+        assert!(s.note.starts_with("Image grok-imagine $1.75"));
+        assert_eq!(xai_local_ts(b[0].start_secs), "2026-09-01 00:00:00");
+    }
 
     #[test]
     fn civil_roundtrip() {

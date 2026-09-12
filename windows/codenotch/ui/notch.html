@@ -136,6 +136,7 @@ let cursorSnap={status:'absent',windows:[],fetched_at:0,note:''};
 let agSnap={status:'absent',windows:[],fetched_at:0,note:''};
 let anthApiSnap={status:'absent',windows:[],fetched_at:0,note:''};
 let oaiApiSnap={status:'absent',windows:[],fetched_at:0,note:''};
+let xaiApiSnap={status:'absent',windows:[],fetched_at:0,note:''};
 let glyphs={}; // id → {kind:'mark'|'appicon', url}
 let activity=[]; // working state of the non-Claude providers: {provider,state:'busy'|'waiting',name,detail,since}
 let uiLang='en';
@@ -143,6 +144,7 @@ const RU_TEXT={
   'of budget':'от бюджета','This month':'Этот месяц','Today':'Сегодня',
   'Enter a valid Anthropic admin key in Settings → API spend.':'Введите действующий admin-ключ Anthropic в Настройки → API spend.',
   'Enter a valid OpenAI admin key in Settings → API spend.':'Введите действующий admin-ключ OpenAI в Настройки → API spend.',
+  'Enter a valid xAI management key in Settings → API spend.':'Введите действующий management-ключ xAI в Настройки → API spend.',
   'Included usage':'Включённое использование',
   'API usage':'Использование API',
   'On demand':'По запросу',
@@ -274,6 +276,7 @@ function providers(){
   if(agSnap.status!=='absent') list.push({id:'gemini',name:'Antigravity',glyph:'Ag',snap:agSnap});
   if(anthApiSnap.status!=='absent') list.push({id:'anthropic_api',name:'Anthropic API',glyph:'A$',glyphId:'claude',badge:'$',snap:anthApiSnap});
   if(oaiApiSnap.status!=='absent') list.push({id:'openai_api',name:'OpenAI API',glyph:'O$',glyphId:'codex',badge:'$',snap:oaiApiSnap});
+  if(xaiApiSnap.status!=='absent') list.push({id:'xai_api',name:'xAI API',glyph:'X$',glyphId:'grok',badge:'$',snap:xaiApiSnap});
   if(Array.isArray(notchSlots)&&notchSlots.length){
     const picked=list.filter(p=>!!slotFor(p.id));
     // Never leave the notch with nothing in it: an empty result means the choice no longer matches
@@ -383,7 +386,7 @@ function renderCard(){
   let html=`<div class="c-head">${headIcon}<span class="c-title">${uiLang==='ru'?'Использование '+p.name:p.name+' Usage'}</span></div>`;
   if(staleOf(snap)&&snap.fetched_at) html+=`<div class="c-sub">${textCopy('Updated')} ${ago(snap.fetched_at)}</div>`;
   if(snap.status==='needsAuth'){
-    const who={claude:'Sign in to Claude Code to see usage.',cursor:'Sign in to Cursor to see usage.',codex:'Sign in to Codex to see usage.',gemini:'Sign in to Antigravity to see usage.',anthropic_api:'Enter a valid Anthropic admin key in Settings → API spend.',openai_api:'Enter a valid OpenAI admin key in Settings → API spend.'}[p.id]||'';
+    const who={claude:'Sign in to Claude Code to see usage.',cursor:'Sign in to Cursor to see usage.',codex:'Sign in to Codex to see usage.',gemini:'Sign in to Antigravity to see usage.',anthropic_api:'Enter a valid Anthropic admin key in Settings → API spend.',openai_api:'Enter a valid OpenAI admin key in Settings → API spend.',xai_api:'Enter a valid xAI management key in Settings → API spend.'}[p.id]||'';
     html+=`<div class="c-note">${textCopy(who)}<br>${esc(textCopy(snap.note||''))}</div>`;
   }else if(!snap.windows.length){
     html+=`<div class="c-note">${esc(textCopy(snap.note||'Waiting for first reading…'))}</div>`;
@@ -611,6 +614,8 @@ listen('anthropic_api',e=>{anthApiSnap=e.payload||anthApiSnap;renderRing();if(ca
 invoke('get_anthropic_api').then(u=>{anthApiSnap=u||anthApiSnap;renderRing();}).catch(()=>{});
 listen('openai_api',e=>{oaiApiSnap=e.payload||oaiApiSnap;renderRing();if(card.classList.contains('show'))renderCard();}).catch(()=>{});
 invoke('get_openai_api').then(u=>{oaiApiSnap=u||oaiApiSnap;renderRing();}).catch(()=>{});
+listen('xai_api',e=>{xaiApiSnap=e.payload||xaiApiSnap;renderRing();if(card.classList.contains('show'))renderCard();}).catch(()=>{});
+invoke('get_xai_api').then(u=>{xaiApiSnap=u||xaiApiSnap;renderRing();}).catch(()=>{});
 invoke('get_antigravity').then(u=>{agSnap=u||agSnap;renderRing();}).catch(()=>{});
 loadScale();
 invoke('get_notch_slots').then(v=>{if(Array.isArray(v)){notchSlots=v;renderRing();}}).catch(()=>{});

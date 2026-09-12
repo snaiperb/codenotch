@@ -83,6 +83,14 @@ pub struct Config {
     pub openai_admin_key: String,
     #[serde(default)]
     pub openai_budget_usd: f64,
+    /// xAI management key (console.x.ai → Management keys) and the team whose spend to read;
+    /// an empty team id is looked up from the key itself
+    #[serde(default)]
+    pub xai_management_key: String,
+    #[serde(default)]
+    pub xai_team_id: String,
+    #[serde(default)]
+    pub xai_budget_usd: f64,
 }
 
 fn default_notch_y() -> f64 {
@@ -141,6 +149,9 @@ impl Default for Config {
             anthropic_budget_usd: 0.0,
             openai_admin_key: String::new(),
             openai_budget_usd: 0.0,
+            xai_management_key: String::new(),
+            xai_team_id: String::new(),
+            xai_budget_usd: 0.0,
         }
     }
 }

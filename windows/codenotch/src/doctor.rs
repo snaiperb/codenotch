@@ -80,6 +80,7 @@ pub fn run() -> String {
     o += &format!("  {}\n", crate::antigravity::probe());
     o += &format!("  {}\n", crate::apicost::probe(crate::apicost::Vendor::Anthropic));
     o += &format!("  {}\n", crate::apicost::probe(crate::apicost::Vendor::OpenAi));
+    o += &format!("  {}\n", crate::apicost::probe(crate::apicost::Vendor::Xai));
     o += &format!("\nprovider glyphs:\n{}\n", crate::glyphs::probe());
     o += &format!("\nworking state:\n  {}\n", crate::activity::probe());
 

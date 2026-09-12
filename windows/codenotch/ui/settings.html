@@ -436,6 +436,16 @@
       </div>
 
       <div class="block">
+        <div class="b-head">xAI (Grok)</div>
+        <div class="b-sub">Create a management key at console.x.ai → Settings → Management keys (your account needs the “Management Keys” permission). The team is read from the key; enter a team ID only if you have several teams.</div>
+        <div class="kv">
+          <input class="txt" id="xai-key" type="password" placeholder="xai-…" autocomplete="off" spellcheck="false" aria-label="xAI management key">
+          <input class="txt" id="xai-budget" type="number" min="0" step="1" placeholder="Budget $" aria-label="xAI monthly budget, USD">
+        </div>
+        <input class="txt" id="xai-team" type="text" placeholder="Team ID (optional)" autocomplete="off" spellcheck="false" aria-label="xAI team ID" style="margin-top:8px">
+      </div>
+
+      <div class="block">
         <div class="b-sub">The ring fills as a share of the monthly budget you enter; with no budget only the dollar figure is shown. Readings refresh every 15 minutes, or at once from the tray's Refresh.</div>
         <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
           <button class="btn" id="spend-save">Save</button>
@@ -1265,6 +1275,9 @@ const hooksSwitch = remoteSwitch('sw-hooks', 'get_hooks_installed', 'set_hooks_i
     f('anth-budget').value = c.anthropic_budget_usd > 0 ? c.anthropic_budget_usd : '';
     f('oai-key').value = c.openai_admin_key || '';
     f('oai-budget').value = c.openai_budget_usd > 0 ? c.openai_budget_usd : '';
+    f('xai-key').value = c.xai_management_key || '';
+    f('xai-team').value = c.xai_team_id || '';
+    f('xai-budget').value = c.xai_budget_usd > 0 ? c.xai_budget_usd : '';
   }
   call('get_api_spend_config', undefined, null).then(fill);
   f('spend-save').addEventListener('click', () => {
@@ -1273,6 +1286,9 @@ const hooksSwitch = remoteSwitch('sw-hooks', 'get_hooks_installed', 'set_hooks_i
       anthropic_budget_usd: Math.max(0, parseFloat(f('anth-budget').value) || 0),
       openai_admin_key: f('oai-key').value.trim(),
       openai_budget_usd: Math.max(0, parseFloat(f('oai-budget').value) || 0),
+      xai_management_key: f('xai-key').value.trim(),
+      xai_team_id: f('xai-team').value.trim(),
+      xai_budget_usd: Math.max(0, parseFloat(f('xai-budget').value) || 0),
     };
     invoke('set_api_spend_config', { cfg })
       .then(() => toast(ui('Saved', 'Saved')))
@@ -1280,7 +1296,7 @@ const hooksSwitch = remoteSwitch('sw-hooks', 'get_hooks_installed', 'set_hooks_i
   });
   f('spend-show').addEventListener('click', () => {
     const hidden = f('anth-key').type === 'password';
-    f('anth-key').type = f('oai-key').type = hidden ? 'text' : 'password';
+    f('anth-key').type = f('oai-key').type = f('xai-key').type = hidden ? 'text' : 'password';
     f('spend-show').textContent = hidden ? ui('Hide keys', 'Hide keys') : ui('Show keys', 'Show keys');
   });
 })();
