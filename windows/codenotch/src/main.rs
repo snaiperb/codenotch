@@ -13,6 +13,7 @@ mod usage;
 mod codex;
 mod cursor;
 mod antigravity;
+mod apicost;
 mod agy_cli;
 mod glyphs;
 mod trayicon;
@@ -38,6 +39,9 @@ pub struct AppState {
     pub codex: Mutex<usage::UsageSnapshot>,
     pub cursor: Mutex<usage::UsageSnapshot>,
     pub antigravity: Mutex<usage::UsageSnapshot>,
+    /// Pay-as-you-go spend cells (Settings → API spend); absent until an admin key is entered
+    pub anthropic_api: Mutex<usage::UsageSnapshot>,
+    pub openai_api: Mutex<usage::UsageSnapshot>,
     /// Provider glyph cache, collected at launch and again on a tray refresh
     pub glyphs: Mutex<std::collections::HashMap<String, glyphs::Glyph>>,
     /// Working state of the non-Claude providers (Cursor reports it; Codex and Antigravity are inferred from recent writes)
@@ -268,11 +272,59 @@ fn refresh_usage(app: AppHandle) {
     codex::request_refresh();
     cursor::request_refresh();
     antigravity::request_refresh();
+    apicost::request_refresh();
 }
 
 #[tauri::command]
 fn get_antigravity(state: tauri::State<AppState>) -> usage::UsageSnapshot {
     state.antigravity.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn get_anthropic_api(state: tauri::State<AppState>) -> usage::UsageSnapshot {
+    state.anthropic_api.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn get_openai_api(state: tauri::State<AppState>) -> usage::UsageSnapshot {
+    state.openai_api.lock().unwrap().clone()
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ApiSpendConfig {
+    anthropic_admin_key: String,
+    anthropic_budget_usd: f64,
+    openai_admin_key: String,
+    openai_budget_usd: f64,
+}
+
+#[tauri::command]
+fn get_api_spend_config(app: AppHandle) -> ApiSpendConfig {
+    let st = app.state::<AppState>();
+    let c = st.cfg.lock().unwrap();
+    ApiSpendConfig {
+        anthropic_admin_key: c.anthropic_admin_key.clone(),
+        anthropic_budget_usd: c.anthropic_budget_usd,
+        openai_admin_key: c.openai_admin_key.clone(),
+        openai_budget_usd: c.openai_budget_usd,
+    }
+}
+
+/// Saves the keys and budgets and polls both vendors at once, so the cell appears (or its ring
+/// re-scales) the moment the settings window is done rather than on the next quarter-hour.
+#[tauri::command]
+fn set_api_spend_config(app: AppHandle, cfg: ApiSpendConfig) {
+    {
+        let st = app.state::<AppState>();
+        let mut c = st.cfg.lock().unwrap();
+        c.anthropic_admin_key = cfg.anthropic_admin_key.trim().to_string();
+        c.anthropic_budget_usd = cfg.anthropic_budget_usd.max(0.0);
+        c.openai_admin_key = cfg.openai_admin_key.trim().to_string();
+        c.openai_budget_usd = cfg.openai_budget_usd.max(0.0);
+        config::save(&c);
+    }
+    apicost::request_refresh();
+    tray::refresh_menu(&app);
 }
 
 #[tauri::command]
@@ -324,6 +376,8 @@ fn open_provider_page(provider: String) {
         "codex" => "https://chatgpt.com/#settings/Account",
         "cursor" => "https://cursor.com/dashboard",
         "gemini" => "https://antigravity.google",
+        "anthropic_api" => "https://console.anthropic.com/settings/cost",
+        "openai_api" => "https://platform.openai.com/usage",
         _ => "https://claude.ai/settings/usage",
     };
     let mut cmd = std::process::Command::new("cmd");
@@ -673,6 +727,8 @@ fn snapshot_of(app: &AppHandle, id: &str) -> usage::UsageSnapshot {
         "codex" => st.codex.lock().unwrap().clone(),
         "cursor" => st.cursor.lock().unwrap().clone(),
         "gemini" => st.antigravity.lock().unwrap().clone(),
+        "anthropic_api" => st.anthropic_api.lock().unwrap().clone(),
+        "openai_api" => st.openai_api.lock().unwrap().clone(),
         _ => st.usage.lock().unwrap().clone(),
     }
 }
@@ -942,12 +998,14 @@ pub fn provider_label(id: &str) -> &'static str {
         "codex" => "Codex",
         "cursor" => "Cursor",
         "gemini" => "Antigravity",
+        "anthropic_api" => "Anthropic API",
+        "openai_api" => "OpenAI API",
         _ => "Claude",
     }
 }
 
 /// Every provider the tray menu can offer, in the order the notch shows them.
-pub const TRAY_PROVIDER_IDS: [&str; 4] = ["claude", "codex", "cursor", "gemini"];
+pub const TRAY_PROVIDER_IDS: [&str; 6] = ["claude", "codex", "cursor", "gemini", "anthropic_api", "openai_api"];
 
 /// Draws the icon and writes the tooltip. Shared by the polling thread and by the settings window,
 /// so a change made in settings shows up at once rather than on the next poll.
@@ -1128,6 +1186,8 @@ fn main() {
             codex: Mutex::new(codex::load_persisted()),
             cursor: Mutex::new(cursor::load_persisted()),
             antigravity: Mutex::new(antigravity::load_persisted()),
+            anthropic_api: Mutex::new(apicost::load_persisted(apicost::Vendor::Anthropic)),
+            openai_api: Mutex::new(apicost::load_persisted(apicost::Vendor::OpenAi)),
             glyphs: Mutex::new(Default::default()),
             activity: Mutex::new(Vec::new()),
         })
@@ -1137,6 +1197,10 @@ fn main() {
             get_codex,
             get_cursor,
             get_antigravity,
+            get_anthropic_api,
+            get_openai_api,
+            get_api_spend_config,
+            set_api_spend_config,
             get_glyphs,
             get_activity,
             open_data_dir,
@@ -1200,6 +1264,8 @@ fn main() {
             codex::start(handle.clone());
             cursor::start(handle.clone());
             antigravity::start(handle.clone());
+            apicost::start(handle.clone(), apicost::Vendor::Anthropic);
+            apicost::start(handle.clone(), apicost::Vendor::OpenAi);
             activity::start(handle.clone());
             // Collecting glyphs may read icon resources out of a few executables; do it off the main thread and push when done
             let gh = handle.clone();

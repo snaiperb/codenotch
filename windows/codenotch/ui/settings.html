@@ -99,6 +99,13 @@
     background:#0a0a0a;border:1px solid #2e2e2e;border-radius:9px;color:#e8e8ea;font:inherit;
     font-size:12px;padding:7px 12px;cursor:pointer;
   }
+  .txt{
+    background:#0a0a0a;border:1px solid #2e2e2e;border-radius:9px;color:#e8e8ea;font:inherit;
+    font-size:12px;padding:6px 8px;width:100%;box-sizing:border-box;
+  }
+  .txt:hover{border-color:#3f3f3f}
+  .txt:focus-visible{outline:1px solid #8a8a8a;outline-offset:1px}
+  .kv{display:grid;grid-template-columns:1fr 110px;gap:8px;margin-top:8px}
   .btn:hover{border-color:#3f3f3f;background:#141414}
   .btn:focus-visible{outline:1px solid #8a8a8a;outline-offset:1px}
 
@@ -256,6 +263,7 @@
     <div class="s-group">General</div>
     <button class="tab" id="tab-behaviour" role="tab" aria-controls="pane-behaviour" aria-selected="false" tabindex="-1">Behaviour</button>
     <button class="tab" id="tab-hooks" role="tab" aria-controls="pane-hooks" aria-selected="false" tabindex="-1">Claude Code</button>
+    <button class="tab" id="tab-spend" role="tab" aria-controls="pane-spend" aria-selected="false" tabindex="-1">API spend</button>
     <button class="tab" id="tab-about" role="tab" aria-controls="pane-about" aria-selected="false" tabindex="-1">About</button>
   </nav>
 
@@ -404,6 +412,38 @@
       </div>
     </section>
 
+    <!-- GENERAL / API spend ------------------------------------------------------------------ -->
+    <section class="pane" id="pane-spend" role="tabpanel" aria-labelledby="tab-spend" tabindex="0" hidden>
+      <h1 class="p-title">API spend</h1>
+      <p class="p-lede">Pay-as-you-go cost of your API keys, month to date, as an extra cell in the notch. This needs an <b>admin</b> key — a different thing from an ordinary API key — because only that can read the organisation's cost report. The key is stored in Codenotch's config file on this computer and is sent to the vendor only.</p>
+
+      <div class="block first">
+        <div class="b-head">Anthropic</div>
+        <div class="b-sub">Create the key at console.anthropic.com → Settings → Admin keys (it starts with sk-ant-admin). Leave the field empty to hide the cell.</div>
+        <div class="kv">
+          <input class="txt" id="anth-key" type="password" placeholder="sk-ant-admin…" autocomplete="off" spellcheck="false" aria-label="Anthropic admin key">
+          <input class="txt" id="anth-budget" type="number" min="0" step="1" placeholder="Budget $" aria-label="Anthropic monthly budget, USD">
+        </div>
+      </div>
+
+      <div class="block">
+        <div class="b-head">OpenAI</div>
+        <div class="b-sub">Create the key at platform.openai.com → Settings → Organization → Admin keys (it starts with sk-admin). Leave the field empty to hide the cell.</div>
+        <div class="kv">
+          <input class="txt" id="oai-key" type="password" placeholder="sk-admin-…" autocomplete="off" spellcheck="false" aria-label="OpenAI admin key">
+          <input class="txt" id="oai-budget" type="number" min="0" step="1" placeholder="Budget $" aria-label="OpenAI monthly budget, USD">
+        </div>
+      </div>
+
+      <div class="block">
+        <div class="b-sub">The ring fills as a share of the monthly budget you enter; with no budget only the dollar figure is shown. Readings refresh every 15 minutes, or at once from the tray's Refresh.</div>
+        <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+          <button class="btn" id="spend-save">Save</button>
+          <button class="btn" id="spend-show" type="button">Show keys</button>
+        </div>
+      </div>
+    </section>
+
     <!-- GENERAL / About ---------------------------------------------------------------------- -->
     <section class="pane" id="pane-about" role="tabpanel" aria-labelledby="tab-about" tabindex="0" hidden>
       <h1 class="p-title">About</h1>
@@ -488,6 +528,7 @@ function band(p){ return p < 50 ? '#4ade80' : p < 80 ? '#facc15' : '#f87171'; }
 const ORDER = ['claude', 'codex', 'cursor', 'gemini'];
 const FALLBACK_LABEL = { claude:'Claude', codex:'Codex', cursor:'Cursor', gemini:'Antigravity' };
 const RU_STATIC = {
+  'API spend':'Расход API', 'Save':'Сохранить', 'Show keys':'Показать ключи', 'Hide keys':'Скрыть ключи',
   'Settings sections':'Разделы настроек', 'Appearance':'Внешний вид', 'Taskbar icon':'Значок в панели задач',
   'Notch':'Панель', 'General':'Общие', 'Behaviour':'Поведение', 'Claude Code':'Claude Code', 'About':'О программе',
   'The small icon down by the clock. Codenotch draws your usage straight into it — 32 pixels square. Pick a layout, then click a part of the picture to choose what that part shows.':'Небольшой значок рядом с часами. Codenotch показывает в нём использование — 32 пикселя. Выберите макет и нажмите на часть изображения, чтобы настроить её.',
@@ -612,7 +653,7 @@ function toast(msg){
    One pane visible at a time. The chosen tab is remembered in localStorage, so reopening the
    window comes back to where the user was. localStorage can throw in a locked-down WebView, so
    both the read and the write are wrapped. */
-const TABS = ['tray', 'notch', 'behaviour', 'hooks', 'about'];
+const TABS = ['tray', 'notch', 'behaviour', 'hooks', 'spend', 'about'];
 const TAB_KEY = 'codenotch.settings.tab';
 let curTab = TABS[0];
 
@@ -1214,6 +1255,35 @@ function remoteSwitch(id, getCmd, setCmd, label){
 }
 const autoSwitch = remoteSwitch('sw-autostart', 'get_autostart', 'set_autostart', 'Start with Windows');
 const hooksSwitch = remoteSwitch('sw-hooks', 'get_hooks_installed', 'set_hooks_installed', 'The Claude Code messages');
+
+/* ---- API spend ---------------------------------------------------------- */
+(function(){
+  const f = id => document.getElementById(id);
+  function fill(c){
+    if(!c) return;
+    f('anth-key').value = c.anthropic_admin_key || '';
+    f('anth-budget').value = c.anthropic_budget_usd > 0 ? c.anthropic_budget_usd : '';
+    f('oai-key').value = c.openai_admin_key || '';
+    f('oai-budget').value = c.openai_budget_usd > 0 ? c.openai_budget_usd : '';
+  }
+  call('get_api_spend_config', undefined, null).then(fill);
+  f('spend-save').addEventListener('click', () => {
+    const cfg = {
+      anthropic_admin_key: f('anth-key').value.trim(),
+      anthropic_budget_usd: Math.max(0, parseFloat(f('anth-budget').value) || 0),
+      openai_admin_key: f('oai-key').value.trim(),
+      openai_budget_usd: Math.max(0, parseFloat(f('oai-budget').value) || 0),
+    };
+    invoke('set_api_spend_config', { cfg })
+      .then(() => toast(ui('Saved', 'Saved')))
+      .catch(err => strip('set_api_spend_config failed: ' + errText(err)));
+  });
+  f('spend-show').addEventListener('click', () => {
+    const hidden = f('anth-key').type === 'password';
+    f('anth-key').type = f('oai-key').type = hidden ? 'text' : 'password';
+    f('spend-show').textContent = hidden ? ui('Hide keys', 'Hide keys') : ui('Show keys', 'Show keys');
+  });
+})();
 
 /* ---- language ----------------------------------------------------------- */
 const LANGS = ['auto', 'en', 'zh', 'ja', 'ko', 'ru'];

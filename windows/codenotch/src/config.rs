@@ -72,6 +72,17 @@ pub struct Config {
     /// leave the app running with no way to reach it.
     #[serde(default = "yes")]
     pub tray_visible: bool,
+    /// Admin keys for the pay-as-you-go cost cells (Settings → API spend). Stored as typed; an
+    /// empty string means that cell is off. These are *admin* keys, not ordinary API keys.
+    #[serde(default)]
+    pub anthropic_admin_key: String,
+    /// Monthly budget in USD the Anthropic API ring fills against; 0 = no budget, figure only
+    #[serde(default)]
+    pub anthropic_budget_usd: f64,
+    #[serde(default)]
+    pub openai_admin_key: String,
+    #[serde(default)]
+    pub openai_budget_usd: f64,
 }
 
 fn default_notch_y() -> f64 {
@@ -126,6 +137,10 @@ impl Default for Config {
             antigravity_model: default_antigravity_model(),
             notch_visible: true,
             tray_visible: true,
+            anthropic_admin_key: String::new(),
+            anthropic_budget_usd: 0.0,
+            openai_admin_key: String::new(),
+            openai_budget_usd: 0.0,
         }
     }
 }

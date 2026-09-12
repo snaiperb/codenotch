@@ -63,6 +63,10 @@ pub struct LimitWindow {
     /// for several things (Antigravity: a 5-hour and a weekly lane per model family). None = ungrouped
     #[serde(default)]
     pub group: Option<String>,
+    /// Ready-made figure for the cell and the card ("$12.40") when a percentage is not the point —
+    /// the API-spend cells use it; None means draw the percentage as usual
+    #[serde(default)]
+    pub text: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

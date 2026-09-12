@@ -46,6 +46,7 @@
   /* Glyphs: mark = the provider's own brand mark (monochrome, shown white); appicon = the installed app's icon (colour, rounded and shrunk) */
   .glyph img,.glyph svg{display:block;pointer-events:none;user-select:none}
   .glyph .mark{display:block;width:26px;height:26px;color:#e8e8ea}
+  .glyph .badge{position:absolute;right:9px;bottom:9px;min-width:13px;height:13px;line-height:13px;border-radius:7px;background:#e8e8ea;color:#111;font:700 9px/13px system-ui,Segoe UI,sans-serif;text-align:center;padding:0 2px}
   .glyph .mark svg{width:26px;height:26px;fill:currentColor} /* inline SVG follows currentColor, so it dims together with the cell */
   .glyph img.png{width:26px;height:26px;object-fit:contain}
   .glyph img.appicon{width:30px;height:30px;border-radius:8px;object-fit:cover}
@@ -133,10 +134,15 @@ let usage={status:'',windows:[],fetched_at:0,note:''};
 let codexSnap={status:'absent',windows:[],fetched_at:0,note:''};
 let cursorSnap={status:'absent',windows:[],fetched_at:0,note:''};
 let agSnap={status:'absent',windows:[],fetched_at:0,note:''};
+let anthApiSnap={status:'absent',windows:[],fetched_at:0,note:''};
+let oaiApiSnap={status:'absent',windows:[],fetched_at:0,note:''};
 let glyphs={}; // id → {kind:'mark'|'appicon', url}
 let activity=[]; // working state of the non-Claude providers: {provider,state:'busy'|'waiting',name,detail,since}
 let uiLang='en';
 const RU_TEXT={
+  'of budget':'от бюджета','This month':'Этот месяц','Today':'Сегодня',
+  'Enter a valid Anthropic admin key in Settings → API spend.':'Введите действующий admin-ключ Anthropic в Настройки → API spend.',
+  'Enter a valid OpenAI admin key in Settings → API spend.':'Введите действующий admin-ключ OpenAI в Настройки → API spend.',
   'Included usage':'Включённое использование',
   'API usage':'Использование API',
   'On demand':'По запросу',
@@ -183,6 +189,7 @@ function textCopy(value){
   if(RU_TEXT[value]) return RU_TEXT[value];
   return String(value)
     .replace(/^(\d+)m limit$/,'Лимит на $1 мин')
+    .replace(/^This month · budget (.+)$/,'Этот месяц · бюджет $1')
     .replace(/^(\d+)h limit$/,'Лимит на $1 ч')
     .replace(/^(\d+)d limit$/,'Лимит на $1 дн.')
     .replace(/^Rate limited, retrying in (\d+)s$/,'Превышен лимит, повтор через $1 с')
@@ -244,9 +251,12 @@ function workState(id){
   return 'idle';
 }
 function glyphHtml(p,small){
-  const g=glyphs[p.id];
-  if(g&&g.kind==='svg'&&g.svg) return `<span class="mark">${g.svg}</span>`;
-  if(g&&g.url) return `<img class="${g.kind}" src="${g.url}" alt="${p.name}"${small?' style="width:16px;height:16px;border-radius:4px"':''}>`;
+  // An API-spend cell borrows its vendor's mark and wears a small $ badge so the two cells of one
+  // vendor (subscription limit, pay-as-you-go spend) stay telling apart at a glance
+  const g=glyphs[p.glyphId||p.id];
+  const badge=p.badge&&!small?`<span class="badge">${p.badge}</span>`:'';
+  if(g&&g.kind==='svg'&&g.svg) return `<span class="mark">${g.svg}</span>${badge}`;
+  if(g&&g.url) return `<img class="${g.kind}" src="${g.url}" alt="${p.name}"${small?' style="width:16px;height:16px;border-radius:4px"':''}>${badge}`;
   return small?'':p.glyph; // fallback letter
 }
 // Provider table (order = top to bottom in the pill). `glyph` is the fallback letter used when no mark is available
@@ -262,6 +272,8 @@ function providers(){
   if(codexSnap.status!=='absent') list.push({id:'codex',name:'Codex',glyph:'Cx',snap:codexSnap});
   if(cursorSnap.status!=='absent') list.push({id:'cursor',name:'Cursor',glyph:'Cu',snap:cursorSnap});
   if(agSnap.status!=='absent') list.push({id:'gemini',name:'Antigravity',glyph:'Ag',snap:agSnap});
+  if(anthApiSnap.status!=='absent') list.push({id:'anthropic_api',name:'Anthropic API',glyph:'A$',glyphId:'claude',badge:'$',snap:anthApiSnap});
+  if(oaiApiSnap.status!=='absent') list.push({id:'openai_api',name:'OpenAI API',glyph:'O$',glyphId:'codex',badge:'$',snap:oaiApiSnap});
   if(Array.isArray(notchSlots)&&notchSlots.length){
     const picked=list.filter(p=>!!slotFor(p.id));
     // Never leave the notch with nothing in it: an empty result means the choice no longer matches
@@ -310,7 +322,7 @@ function isStale(){
 function renderRing(){
   const ps=providers();
   // Rebuild the DOM only when the structure changes (never swap the element under the cursor)
-  const want=ps.map(p=>p.id+':'+(glyphs[p.id]?glyphs[p.id].kind:'-')).join(',');
+  const want=ps.map(p=>p.id+':'+(glyphs[p.glyphId||p.id]?glyphs[p.glyphId||p.id].kind:'-')).join(',');
   if(pill.dataset.cells!==want){
     pill.innerHTML=ps.map(p=>`<div class="cell" data-p="${p.id}">
       <div class="ringwrap"><svg class="ring" viewBox="0 0 56 56"></svg><div class="glyph ${(!glyphs[p.id]&&p.glyph.length>1)?'small':''}">${glyphHtml(p)}</div></div>
@@ -330,6 +342,7 @@ function renderRing(){
     }
     svg.innerHTML=inner;
     if(p.snap.status==='needsAuth'||p.snap.status==='none') pct.textContent='—';
+    else if(h && h.text) pct.textContent=h.text; // a ready-made figure ("$12.40") beats a percentage
     else if(h && h.count!=null) pct.textContent='~'+h.count;
     else if(h) pct.textContent=(h.derived?'~':'')+Math.round(h.used*100)+'%';
     else pct.textContent=p.snap.windows.length?'—':'…'; // its declared window is missing: a dash, not a wait
@@ -370,7 +383,7 @@ function renderCard(){
   let html=`<div class="c-head">${headIcon}<span class="c-title">${uiLang==='ru'?'Использование '+p.name:p.name+' Usage'}</span></div>`;
   if(staleOf(snap)&&snap.fetched_at) html+=`<div class="c-sub">${textCopy('Updated')} ${ago(snap.fetched_at)}</div>`;
   if(snap.status==='needsAuth'){
-    const who={claude:'Sign in to Claude Code to see usage.',cursor:'Sign in to Cursor to see usage.',codex:'Sign in to Codex to see usage.',gemini:'Sign in to Antigravity to see usage.'}[p.id]||'';
+    const who={claude:'Sign in to Claude Code to see usage.',cursor:'Sign in to Cursor to see usage.',codex:'Sign in to Codex to see usage.',gemini:'Sign in to Antigravity to see usage.',anthropic_api:'Enter a valid Anthropic admin key in Settings → API spend.',openai_api:'Enter a valid OpenAI admin key in Settings → API spend.'}[p.id]||'';
     html+=`<div class="c-note">${textCopy(who)}<br>${esc(textCopy(snap.note||''))}</div>`;
   }else if(!snap.windows.length){
     html+=`<div class="c-note">${esc(textCopy(snap.note||'Waiting for first reading…'))}</div>`;
@@ -391,7 +404,7 @@ function renderCard(){
       html+=`<div class="win">
         <div class="w-row"><span class="w-label">${esc(textCopy(w.label))}</span><span class="w-reset">${resetCopy(w.resets_at)}</span></div>
         <div class="w-track"><div class="w-fill" style="width:${(Math.min(w.used,1)*100).toFixed(0)}%;background:${tone(w.used)}"></div></div>
-        <div class="w-used">${w.derived?'~':''}${Math.round(w.used*100)}% ${textCopy('Used')}</div>
+        <div class="w-used">${w.text?esc(w.text)+(w.used>0?` · ${Math.round(w.used*100)}% ${textCopy('of budget')}`:''):`${w.derived?'~':''}${Math.round(w.used*100)}% ${textCopy('Used')}`}</div>
       </div>`;
     }
     if(group) html+=`</div>`;
@@ -594,6 +607,10 @@ listen('codex',e=>{codexSnap=e.payload||codexSnap;renderRing();if(card.classList
 listen('cursor',e=>{cursorSnap=e.payload||cursorSnap;renderRing();if(card.classList.contains('show'))renderCard();}).catch(()=>{});
 invoke('get_cursor').then(u=>{cursorSnap=u||cursorSnap;renderRing();}).catch(()=>{});
 listen('antigravity',e=>{agSnap=e.payload||agSnap;renderRing();if(card.classList.contains('show'))renderCard();}).catch(()=>{});
+listen('anthropic_api',e=>{anthApiSnap=e.payload||anthApiSnap;renderRing();if(card.classList.contains('show'))renderCard();}).catch(()=>{});
+invoke('get_anthropic_api').then(u=>{anthApiSnap=u||anthApiSnap;renderRing();}).catch(()=>{});
+listen('openai_api',e=>{oaiApiSnap=e.payload||oaiApiSnap;renderRing();if(card.classList.contains('show'))renderCard();}).catch(()=>{});
+invoke('get_openai_api').then(u=>{oaiApiSnap=u||oaiApiSnap;renderRing();}).catch(()=>{});
 invoke('get_antigravity').then(u=>{agSnap=u||agSnap;renderRing();}).catch(()=>{});
 loadScale();
 invoke('get_notch_slots').then(v=>{if(Array.isArray(v)){notchSlots=v;renderRing();}}).catch(()=>{});
