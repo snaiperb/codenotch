@@ -141,7 +141,7 @@ let glyphs={}; // id → {kind:'mark'|'appicon', url}
 let activity=[]; // working state of the non-Claude providers: {provider,state:'busy'|'waiting',name,detail,since}
 let uiLang='en';
 const RU_TEXT={
-  'of budget':'от бюджета','This month':'Этот месяц','Today':'Сегодня',
+  'of budget':'от бюджета','This month':'Этот месяц','Today':'Сегодня','Prepaid balance':'Баланс (предоплата)',
   'Enter a valid Anthropic admin key in Settings → API spend.':'Введите действующий admin-ключ Anthropic в Настройки → API spend.',
   'Enter a valid OpenAI admin key in Settings → API spend.':'Введите действующий admin-ключ OpenAI в Настройки → API spend.',
   'Enter a valid xAI management key in Settings → API spend.':'Введите действующий management-ключ xAI в Настройки → API spend.',
@@ -402,6 +402,10 @@ function renderCard(){
       if(w.count!=null){
         html+=`<div class="win"><div class="w-row"><span class="w-label">${esc(textCopy(w.label))}</span></div>
           <div class="w-used">${w.count>0?`~${w.count} ${textCopy(w.count===1?'request today':'requests today')}`:textCopy('no requests today')}</div></div>`;
+        continue;
+      }
+      if(w.text&&!w.resets_at&&!w.used){ // a plain figure such as a prepaid balance: no bar, no reset
+        html+=`<div class="win"><div class="w-row"><span class="w-label">${esc(textCopy(w.label))}</span><span class="w-reset">${esc(w.text)}</span></div></div>`;
         continue;
       }
       html+=`<div class="win">

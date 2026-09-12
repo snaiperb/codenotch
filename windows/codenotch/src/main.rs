@@ -14,6 +14,7 @@ mod codex;
 mod cursor;
 mod antigravity;
 mod apicost;
+mod secret;
 mod agy_cli;
 mod glyphs;
 mod trayicon;
@@ -29,7 +30,7 @@ use tauri::{AppHandle, Emitter, Manager};
 pub const NOTCH_W: f64 = 360.0;
 /// Hand-bumped build tag, written to run.log at startup so a log can always be matched to the exe that wrote it.
 pub const BUILD: &str = "r31";
-pub const NOTCH_H: f64 = 520.0; // 300 clipped the card once it held three window blocks plus the session list; 460 clipped Antigravity's two model groups once the reading was stale and an agent was working
+pub const NOTCH_H: f64 = 700.0; // upstream went 460→520 for Antigravity's groups; 520 still clipped the pill at five cells (each ~80 px + 14 gap); seven now fit
 
 pub struct AppState {
     pub store: Mutex<state::Store>,

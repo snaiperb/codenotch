@@ -137,7 +137,7 @@ fn xai_team_id(app: Option<&AppHandle>, key: &str) -> Result<String, FetchErr> {
         return Ok(typed);
     }
     let v = get_json(
-        ureq::get("https://management-api.x.ai/auth/management-keys/validation")
+        agent().get("https://management-api.x.ai/auth/management-keys/validation")
             .set("authorization", &format!("Bearer {key}"))
             .set("user-agent", "codenotch-windows"),
     )?;
@@ -323,6 +323,12 @@ fn parse_buckets(vendor: Vendor, v: &serde_json::Value) -> Vec<Bucket> {
     out
 }
 
+/// One client for every vendor call: no redirects, so an Authorization header can never be
+/// replayed to a host other than the one written in this file.
+fn agent() -> ureq::Agent {
+    ureq::AgentBuilder::new().redirects(0).timeout(HTTP_TIMEOUT).build()
+}
+
 fn get_json(req: ureq::Request) -> Result<serde_json::Value, FetchErr> {
     match req.timeout(HTTP_TIMEOUT).call() {
         Ok(r) => r.into_json::<serde_json::Value>().map_err(|e| FetchErr::Other(format!("bad JSON: {e}"))),
@@ -352,7 +358,7 @@ pub fn fetch_month(vendor: Vendor, key: &str, month_start: u64, month_next: u64)
     for _ in 0..4 {
         let req = match vendor {
             Vendor::Anthropic => {
-                let mut r = ureq::get("https://api.anthropic.com/v1/organizations/cost_report")
+                let mut r = agent().get("https://api.anthropic.com/v1/organizations/cost_report")
                     .query("starting_at", &rfc3339_utc(month_start))
                     .query("ending_at", &rfc3339_utc(month_next))
                     .query("bucket_width", "1d")
@@ -367,7 +373,7 @@ pub fn fetch_month(vendor: Vendor, key: &str, month_start: u64, month_next: u64)
                 r
             }
             Vendor::OpenAi => {
-                let mut r = ureq::get("https://api.openai.com/v1/organization/costs")
+                let mut r = agent().get("https://api.openai.com/v1/organization/costs")
                     .query("start_time", &month_start.to_string())
                     .query("end_time", &month_next.to_string())
                     .query("bucket_width", "1d")
@@ -404,7 +410,7 @@ fn fetch_month_xai(app: Option<&AppHandle>, key: &str, month_start: u64, month_n
             "filters": []
         }
     });
-    let req = ureq::post(&format!("https://management-api.x.ai/v1/billing/teams/{team}/usage"))
+    let req = agent().post(&format!("https://management-api.x.ai/v1/billing/teams/{team}/usage"))
         .set("authorization", &format!("Bearer {key}"))
         .set("content-type", "application/json")
         .set("user-agent", "codenotch-windows")
@@ -422,6 +428,35 @@ fn fetch_month_xai(app: Option<&AppHandle>, key: &str, month_start: u64, month_n
         Err(e) => return Err(FetchErr::Other(format!("network: {e}"))),
     };
     Ok(parse_xai(&v))
+}
+
+/// xAI prepaid credit left on the team, in USD. The ledger's `total` is in cents with purchases
+/// negative and spend positive, so the balance is its negation.
+fn xai_balance(app: Option<&AppHandle>, key: &str) -> Result<f64, FetchErr> {
+    let team = xai_team_id(app, key)?;
+    let v = get_json(
+        agent().get(&format!("https://management-api.x.ai/v1/billing/teams/{team}/prepaid/balance"))
+            .set("authorization", &format!("Bearer {key}"))
+            .set("user-agent", "codenotch-windows"),
+    )?;
+    let cents = v
+        .get("total")
+        .and_then(|t| t.get("val"))
+        .and_then(|x| x.as_str().and_then(|s| s.parse::<f64>().ok()).or_else(|| x.as_f64()))
+        .ok_or_else(|| FetchErr::Other("balance reply without total.val".into()))?;
+    Ok(-cents / 100.0)
+}
+
+fn balance_window(usd: f64) -> LimitWindow {
+    LimitWindow {
+        id: "balance".into(),
+        label: "Prepaid balance".into(),
+        used: 0.0,
+        resets_at: None,
+        count: None,
+        derived: false,
+        text: Some(fmt_usd(usd)),
+    }
 }
 
 fn fmt_usd(x: f64) -> String {
@@ -497,7 +532,16 @@ fn read_once(app: &AppHandle, vendor: Vendor, prev: &UsageSnapshot) -> UsageSnap
     let (start, next, today) = month_bounds(now);
     let fetched = if vendor == Vendor::Xai { fetch_month_xai(Some(app), &key, start, next) } else { fetch_month(vendor, &key, start, next) };
     match fetched {
-        Ok(buckets) => snapshot_from(&buckets, budget, next, today),
+        Ok(buckets) => {
+            let mut snap = snapshot_from(&buckets, budget, next, today);
+            if vendor == Vendor::Xai {
+                match xai_balance(Some(app), &key) {
+                    Ok(usd) => snap.windows.push(balance_window(usd)),
+                    Err(FetchErr::NeedsAuth(m)) | Err(FetchErr::Other(m)) => crate::applog(&format!("xai_api: balance — {m}")),
+                }
+            }
+            snap
+        }
         Err(FetchErr::NeedsAuth(msg)) => UsageSnapshot { status: "needsAuth".into(), note: msg, fetched_at: now_ms(), ..Default::default() },
         Err(FetchErr::Other(msg)) => {
             let mut s = prev.clone();
@@ -549,14 +593,23 @@ pub fn probe(vendor: Vendor) -> String {
     if key.is_empty() {
         return format!("{}: no admin key (Settings → API spend)", vendor.label());
     }
-    let masked = format!("{}…{}", &key[..key.len().min(10)], &key[key.len().saturating_sub(4)..]);
+    // Enough to tell keys apart in doctor output, never enough to reuse
+    let masked = format!("{}…{}", &key[..key.len().min(7)], &key[key.len().saturating_sub(3)..]);
     let now = now_ms() / 1000;
     let (start, next, today) = month_bounds(now);
     match fetch_month(vendor, &key, start, next) {
         Ok(b) => {
             let s = snapshot_from(&b, budget, next, today);
+            let bal = if vendor == Vendor::Xai {
+                match xai_balance(None, &key) {
+                    Ok(usd) => format!(", balance {}", fmt_usd(usd)),
+                    Err(FetchErr::NeedsAuth(m)) | Err(FetchErr::Other(m)) => format!(", balance unavailable ({m})"),
+                }
+            } else {
+                String::new()
+            };
             format!(
-                "{}: key {masked} OK, {} buckets, month {} today {} budget {}",
+                "{}: key {masked} OK, {} buckets, month {} today {} budget {}{bal}",
                 vendor.label(),
                 b.len(),
                 s.windows[0].text.clone().unwrap_or_default(),
