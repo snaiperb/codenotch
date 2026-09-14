@@ -330,6 +330,15 @@
       </div>
 
       <div class="block">
+        <div class="b-head">Background</div>
+        <div class="b-sub">How solid the black pill is. At 0% only the rings, marks and figures remain and the wallpaper shows through; 100% is the original solid pill.</div>
+        <div class="c-scale">
+          <input id="alpha-range" type="range" min="0" max="100" step="5" value="100" aria-label="Pill background opacity">
+          <span class="c-scale-val" id="alpha-val">100%</span>
+        </div>
+      </div>
+
+      <div class="block">
         <div class="c-note dim">Whether the pill is on screen at all is a separate switch, under General &rarr; Behaviour.</div>
       </div>
     </section>
@@ -539,6 +548,7 @@ const ORDER = ['claude', 'codex', 'cursor', 'gemini'];
 const FALLBACK_LABEL = { claude:'Claude', codex:'Codex', cursor:'Cursor', gemini:'Antigravity' };
 const RU_STATIC = {
   'API spend':'Расход API', 'Save':'Сохранить', 'Show keys':'Показать ключи', 'Hide keys':'Скрыть ключи',
+  'Background':'Подложка', 'How solid the black pill is. At 0% only the rings, marks and figures remain and the wallpaper shows through; 100% is the original solid pill.':'Насколько плотная чёрная подложка. При 0% остаются только кольца, значки и цифры, а обои просвечивают; 100% — исходная сплошная пилюля.',
   'Settings sections':'Разделы настроек', 'Appearance':'Внешний вид', 'Taskbar icon':'Значок в панели задач',
   'Notch':'Панель', 'General':'Общие', 'Behaviour':'Поведение', 'Claude Code':'Claude Code', 'About':'О программе',
   'The small icon down by the clock. Codenotch draws your usage straight into it — 32 pixels square. Pick a layout, then click a part of the picture to choose what that part shows.':'Небольшой значок рядом с часами. Codenotch показывает в нём использование — 32 пикселя. Выберите макет и нажмите на часть изображения, чтобы настроить её.',
@@ -1373,6 +1383,27 @@ function boot(){
   call('get_antigravity_prefs', undefined, null).then(v => {
     if(v && typeof v === 'object'){ agPrefs = v; renderNotch(); }
   });
+
+  (function wireAlpha(){
+    const r = document.getElementById('alpha-range');
+    const lab = document.getElementById('alpha-val');
+    let t = null;
+    r.addEventListener('input', () => {
+      const pct = Math.max(0, Math.min(100, Number(r.value) || 0));
+      lab.textContent = pct + '%';
+      clearTimeout(t);
+      t = setTimeout(() => {
+        invoke('set_pill_alpha', { alpha: pct / 100 })
+          .then(() => toast(ui('Saved', 'Saved')))
+          .catch(e => strip('set_pill_alpha failed: ' + errText(e)));
+      }, 150);
+    });
+    call('get_pill_alpha', undefined, null).then(v => {
+      const n = Number(v);
+      const pct = isFinite(n) ? Math.round(Math.max(0, Math.min(1, n)) * 100) : 100;
+      r.value = String(pct); lab.textContent = pct + '%';
+    });
+  })();
 
   call('get_scale', undefined, null).then(v => {
     const n = Number(v);

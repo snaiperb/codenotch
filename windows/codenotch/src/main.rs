@@ -667,6 +667,28 @@ fn set_scale(app: AppHandle, scale: f64) {
     let _ = app.emit("scale", value);
 }
 
+// ---------------- pill background ----------------
+
+#[tauri::command]
+fn get_pill_alpha(app: AppHandle) -> f64 {
+    let st = app.state::<AppState>();
+    let c = st.cfg.lock().unwrap();
+    c.pill_alpha.clamp(0.0, 1.0)
+}
+
+/// 0 = transparent, 1 = solid black. Stored and pushed to the notch page, which repaints itself.
+#[tauri::command]
+fn set_pill_alpha(app: AppHandle, alpha: f64) {
+    let value = {
+        let st = app.state::<AppState>();
+        let mut c = st.cfg.lock().unwrap();
+        c.pill_alpha = if alpha.is_finite() { alpha.clamp(0.0, 1.0) } else { 1.0 };
+        config::save(&c);
+        c.pill_alpha
+    };
+    let _ = app.emit("pill_alpha", value);
+}
+
 // ---------------- tray icon readings ----------------
 
 /// The tightest metered window, ties going to the lower id so the choice never flickers. A `count`
@@ -1224,6 +1246,8 @@ fn main() {
             get_openai_api,
             get_xai_api,
             get_api_spend_config,
+            get_pill_alpha,
+            set_pill_alpha,
             set_api_spend_config,
             get_glyphs,
             get_activity,

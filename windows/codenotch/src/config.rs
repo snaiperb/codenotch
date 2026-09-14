@@ -91,6 +91,14 @@ pub struct Config {
     pub xai_team_id: String,
     #[serde(default)]
     pub xai_budget_usd: f64,
+    /// Opacity of the pill's black background, 0.0 (transparent — rings float on the wallpaper)
+    /// to 1.0 (solid, the original look). The rings, glyphs and figures are never faded.
+    #[serde(default = "default_pill_alpha")]
+    pub pill_alpha: f64,
+}
+
+fn default_pill_alpha() -> f64 {
+    1.0
 }
 
 fn default_notch_y() -> f64 {
@@ -152,6 +160,7 @@ impl Default for Config {
             xai_management_key: String::new(),
             xai_team_id: String::new(),
             xai_budget_usd: 0.0,
+            pill_alpha: 1.0,
         }
     }
 }
