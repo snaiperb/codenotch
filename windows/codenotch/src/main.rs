@@ -689,6 +689,28 @@ fn set_pill_alpha(app: AppHandle, alpha: f64) {
     let _ = app.emit("pill_alpha", value);
 }
 
+#[tauri::command]
+fn get_pill_text(app: AppHandle) -> String {
+    let st = app.state::<AppState>();
+    let c = st.cfg.lock().unwrap();
+    c.pill_text.clone()
+}
+
+#[tauri::command]
+fn set_pill_text(app: AppHandle, mode: String) {
+    let value = {
+        let st = app.state::<AppState>();
+        let mut c = st.cfg.lock().unwrap();
+        c.pill_text = match mode.as_str() {
+            "light" | "dark" => mode,
+            _ => "auto".into(),
+        };
+        config::save(&c);
+        c.pill_text.clone()
+    };
+    let _ = app.emit("pill_text", value);
+}
+
 // ---------------- tray icon readings ----------------
 
 /// The tightest metered window, ties going to the lower id so the choice never flickers. A `count`
@@ -1248,6 +1270,8 @@ fn main() {
             get_api_spend_config,
             get_pill_alpha,
             set_pill_alpha,
+            get_pill_text,
+            set_pill_text,
             set_api_spend_config,
             get_glyphs,
             get_activity,

@@ -37,9 +37,12 @@
     bottom:calc(-1 * var(--fillet));
     background:radial-gradient(circle at 0 100%, transparent calc(var(--fillet) - 1.5px), rgba(46,46,46,var(--pill-a)) calc(var(--fillet) - 0.5px), rgba(0,0,0,var(--pill-a)) calc(var(--fillet) + 0.5px));
   }
-  /* On a see-through pill the figures need their own contrast against whatever is behind them */
-  #root.see-through .pct{text-shadow:0 0 3px #000,0 0 6px #000,0 1px 2px #000}
+  /* On a see-through pill the figures sit on the wallpaper: light figures get a dark halo, dark
+     figures a light one (Settings → Notch → Figures; "auto" flips to dark once the pill is see-through) */
+  #root.see-through.fig-light .pct{color:#fff;text-shadow:0 0 3px #000,0 0 6px #000,0 1px 2px #000}
+  #root.see-through.fig-dark .pct{color:#111;text-shadow:0 0 3px #fff,0 0 6px #fff,0 1px 2px #fff}
   #root.see-through .glyph{filter:drop-shadow(0 0 2px #000) drop-shadow(0 0 4px #000)}
+  #root:not(.see-through).fig-dark .pct{color:#111}
   .cell{display:flex;flex-direction:column;align-items:center;gap:6px}
   .ringwrap{position:relative;width:56px;height:56px}
   .ringwrap > svg.ring{position:absolute;inset:0;overflow:visible} /* pins only the ring itself; an inline logo svg must not match this or it ends up in the top-left corner */
@@ -575,15 +578,25 @@ document.addEventListener('mouseout',e=>{ // relatedTarget null = the cursor lef
 listen('pointer_left',()=>{if(scaleDragging)return;clearTimeout(hideTimer);hideCard();}).catch(()=>{});
 // The size can also be changed from the settings window, which is a different window entirely.
 // Ignore it while this page's own slider is being dragged, or the two would fight each other.
+let pillAlpha=1, pillText='auto';
+function applyPillLook(){
+  const root=document.getElementById('root');
+  const see=pillAlpha<0.6;
+  root.style.setProperty('--pill-a',String(pillAlpha));
+  root.classList.toggle('see-through', see);
+  const dark = pillText==='dark' || (pillText==='auto' && see);
+  root.classList.toggle('fig-dark', dark);
+  root.classList.toggle('fig-light', !dark);
+}
 function applyPillAlpha(a){
   const n=Number(a); if(!isFinite(n)) return;
-  const v=Math.max(0,Math.min(1,n));
-  const root=document.getElementById('root');
-  root.style.setProperty('--pill-a',String(v));
-  root.classList.toggle('see-through', v<0.6);
+  pillAlpha=Math.max(0,Math.min(1,n)); applyPillLook();
 }
+function applyPillText(m){ pillText=(m==='light'||m==='dark')?m:'auto'; applyPillLook(); }
 listen('pill_alpha',e=>applyPillAlpha(e.payload)).catch(()=>{});
 invoke('get_pill_alpha').then(applyPillAlpha).catch(()=>{});
+listen('pill_text',e=>applyPillText(e.payload)).catch(()=>{});
+invoke('get_pill_text').then(applyPillText).catch(()=>{});
 listen('scale',e=>{
   if(scaleDragging) return;
   const n=Number(e.payload); if(!isFinite(n)||n<=0) return;

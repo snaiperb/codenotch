@@ -95,6 +95,15 @@ pub struct Config {
     /// to 1.0 (solid, the original look). The rings, glyphs and figures are never faded.
     #[serde(default = "default_pill_alpha")]
     pub pill_alpha: f64,
+    /// Colour of the figures under the rings: "auto" (white on a solid pill, dark once the pill
+    /// is see-through), "light" or "dark". A see-through pill sits on whatever wallpaper is
+    /// behind it, and no shadow makes white readable on a light one.
+    #[serde(default = "default_pill_text")]
+    pub pill_text: String,
+}
+
+fn default_pill_text() -> String {
+    "auto".into()
 }
 
 fn default_pill_alpha() -> f64 {
@@ -161,6 +170,7 @@ impl Default for Config {
             xai_team_id: String::new(),
             xai_budget_usd: 0.0,
             pill_alpha: 1.0,
+            pill_text: "auto".into(),
         }
     }
 }
