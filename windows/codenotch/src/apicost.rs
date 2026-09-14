@@ -455,6 +455,7 @@ fn balance_window(usd: f64) -> LimitWindow {
         resets_at: None,
         count: None,
         derived: false,
+        group: None,
         text: Some(fmt_usd(usd)),
     }
 }
@@ -483,6 +484,7 @@ pub fn snapshot_from(buckets: &[Bucket], budget: f64, month_next: u64, today: u6
             resets_at: Some(month_next * 1000),
             count: None,
             derived: false,
+            group: None,
             text: Some(fmt_usd(month)),
         },
         LimitWindow {
@@ -492,6 +494,7 @@ pub fn snapshot_from(buckets: &[Bucket], budget: f64, month_next: u64, today: u6
             resets_at: Some((today + 86_400) * 1000),
             count: None,
             derived: false,
+            group: None,
             text: Some(fmt_usd(today_usd)),
         },
     ];
