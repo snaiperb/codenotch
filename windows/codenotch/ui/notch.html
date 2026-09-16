@@ -308,6 +308,8 @@ function laneIs(w,limit){
 function headlineOf(snap,id){
   const ws=snap.windows; if(!ws.length) return null;
   const byId=x=>ws.find(w=>w.id===x)||null;
+  // A spent window blocks the tool whichever window it leads with, so it takes the ring (same rule as ring_window in main.rs)
+  if(id==='claude'||id==='codex'||id==='cursor'){ const spent=tightestOf(ws); if(spent&&spent.used>=1) return spent; }
   if(id==='claude') return byId('session');
   if(id==='codex') return ws[0];
   if(id==='cursor') return byId('included')||byId('api');
