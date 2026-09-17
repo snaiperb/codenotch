@@ -58,6 +58,14 @@
   .glyph .mark svg{width:26px;height:26px;fill:currentColor} /* inline SVG follows currentColor, so it dims together with the cell */
   .glyph img.png{width:26px;height:26px;object-fit:contain}
   .glyph img.appicon{width:30px;height:30px;border-radius:8px;object-fit:cover}
+  /* Two or three rings eat into the middle, so the mark steps aside for them */
+  .ringwrap.r2 .glyph{font-size:16px}
+  .ringwrap.r2 .glyph .mark,.ringwrap.r2 .glyph .mark svg,.ringwrap.r2 .glyph img.png{width:21px;height:21px}
+  .ringwrap.r2 .glyph img.appicon{width:24px;height:24px}
+  .ringwrap.r3 .glyph{font-size:13px}
+  .ringwrap.r3 .glyph .mark,.ringwrap.r3 .glyph .mark svg,.ringwrap.r3 .glyph img.png{width:16px;height:16px}
+  .ringwrap.r3 .glyph img.appicon{width:18px;height:18px}
+  .ringwrap.r2 .glyph .badge,.ringwrap.r3 .glyph .badge{right:12px;bottom:12px}
   .c-head .mark{display:inline-block;width:16px;height:16px;color:#e8e8ea;margin-right:2px}
   .c-head .mark svg{width:16px;height:16px;fill:currentColor}
   .pct{font-size:15px;font-weight:600;color:#fff;font-variant-numeric:tabular-nums}
@@ -313,6 +321,23 @@ function headlineOf(snap,id){
   if(agPrefs.limit!=='automatic'){ const w=tightestOf(lanes.filter(w=>laneIs(w,agPrefs.limit))); if(w) return w; }
   return tightestOf(lanes.filter(w=>w.used<1))||tightestOf(lanes)||lanes[0];
 }
+// One ring per limit window, outermost first — the same order the card lists them, so a provider
+// with a session and two weekly windows draws three. A dollar cell shows only the month (its
+// "today" figure is not a share of anything the ring could mean), and Antigravity keeps the single
+// lane its own settings choose.
+function ringWindows(snap,id){
+  const ws=snap.windows.filter(w=>w.count==null);
+  if(!ws.length) return [];
+  if(id==='gemini'){ const h=headlineOf(snap,id); return h?[h]:[]; }
+  if(/_api$/.test(id)) return ws.slice(0,1);
+  return ws.slice(0,3);
+}
+// Radii and stroke widths per ring count; the last entry of each is where the activity arc goes
+const RING_GEOM={
+  1:{rings:[[25,5]],act:[19,2.5]},
+  2:{rings:[[25,5],[20,3]],act:[15,2]},
+  3:{rings:[[25,5],[20,3],[15.5,3]],act:[11,2]},
+};
 function staleOf(snap){ if(snap.status==='stale') return true; return snap.fetched_at>0 && (Date.now()-snap.fetched_at)>5*60*1000; }
 let stateSnap={sessions:[],agg:'idle'};
 
@@ -342,14 +367,22 @@ function renderRing(){
     const cell=pill.querySelector(`.cell[data-p="${p.id}"]`); if(!cell) continue;
     const svg=cell.querySelector('svg.ring'), pct=cell.querySelector('.pct'), glyph=cell.querySelector('.glyph'), wrap=cell.querySelector('.ringwrap');
     const h=headlineOf(p.snap,p.id);
-    let inner=`<circle cx="28" cy="28" r="22" fill="#2a2a2a"/><circle cx="28" cy="28" r="25" fill="none" stroke="${TRACK}" stroke-width="5"/>`;
-    if(h && h.count==null) inner+=svgArc(25,Math.min(h.used,1),tone(h.used),5);
+    const rws=ringWindows(p.snap,p.id);
+    const geom=RING_GEOM[Math.min(Math.max(rws.length,1),3)];
+    let inner=`<circle cx="28" cy="28" r="22" fill="#2a2a2a"/>`;
+    geom.rings.forEach(([r,w],i)=>{
+      inner+=`<circle cx="28" cy="28" r="${r}" fill="none" stroke="${TRACK}" stroke-width="${w}"/>`;
+      const win=rws[i];
+      if(win) inner+=svgArc(r,Math.min(win.used,1),tone(win.used),w);
+    });
     { // thin inner arc: spinning = working, amber pulse = waiting on you (one animation for all four, different sources)
-      const ws=workState(p.id);
-      if(ws==='running') inner+=`<g class="arc-spin">${svgArc(19,0.28,RUNGREEN,2.5)}</g>`;
-      else if(ws==='attention') inner+=`<g class="arc-pulse"><circle cx="28" cy="28" r="19" fill="none" stroke="${AMBER}" stroke-width="2.5"/></g>`;
+      const ws=workState(p.id), [ar,aw]=geom.act;
+      if(ws==='running') inner+=`<g class="arc-spin">${svgArc(ar,0.28,RUNGREEN,aw)}</g>`;
+      else if(ws==='attention') inner+=`<g class="arc-pulse"><circle cx="28" cy="28" r="${ar}" fill="none" stroke="${AMBER}" stroke-width="${aw}"/></g>`;
     }
     svg.innerHTML=inner;
+    wrap.classList.toggle('r2', rws.length===2);
+    wrap.classList.toggle('r3', rws.length>=3);
     if(p.snap.status==='needsAuth'||p.snap.status==='none') pct.textContent='—';
     else if(h && h.text) pct.textContent=h.text; // a ready-made figure ("$12.40") beats a percentage
     else if(h && h.count!=null) pct.textContent='~'+h.count;
