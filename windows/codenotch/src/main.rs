@@ -732,18 +732,11 @@ fn ring_window<'a>(
     antigravity_limit: &str,
     antigravity_model: &str,
 ) -> Option<&'a usage::LimitWindow> {
-    let by_id = |id: &str| windows.iter().find(|w| w.id == id);
-    // A spent window blocks the tool whichever window the provider leads with, so it takes the
-    // ring: a weekly limit at 100% must not hide behind a 5-hour window at 0%.
-    if let Some(spent) = tightest(windows.iter()).filter(|w| w.used >= 1.0) {
-        if matches!(provider, "claude" | "codex" | "cursor") {
-            return Some(spent);
-        }
-    }
+    // The ring shows the window that will stop you first — the fullest one — so a weekly limit at
+    // 82% is not hidden behind a session at 0%. (Upstream pins each provider to its "declared"
+    // window instead; the card still lists every window either way.)
     match provider {
-        "claude" => by_id("session"),
-        "codex" => windows.first(),
-        "cursor" => by_id("included").or_else(|| by_id("api")),
+        "claude" | "codex" | "cursor" => tightest(windows.iter()).or_else(|| windows.first()),
         _ => antigravity_lane(windows, antigravity_limit, antigravity_model),
     }
 }
@@ -1487,23 +1480,13 @@ mod tests {
     }
 
     #[test]
-    fn claude_means_the_session_even_when_the_week_is_fuller() {
-        assert_eq!(pick("claude", &[win("session", 0.10), win("weekly_all", 0.60)]), Some("session"));
-    }
-
-    #[test]
-    fn a_missing_declared_window_is_a_dash_not_a_stand_in() {
-        assert_eq!(pick("claude", &[win("weekly_all", 0.60)]), None);
-    }
-
-    #[test]
-    fn codex_means_its_first_window_and_cursor_its_included_usage() {
-        assert_eq!(pick("codex", &[win("primary", 0.2), win("secondary", 0.9)]), Some("primary"));
-        // A spent window wins the ring whatever the provider leads with
+    fn the_ring_shows_the_fullest_window() {
+        assert_eq!(pick("claude", &[win("session", 0.10), win("weekly_all", 0.60)]), Some("weekly_all"));
+        assert_eq!(pick("claude", &[win("session", 0.10), win("weekly_all", 0.57), win("weekly_scoped", 0.82)]), Some("weekly_scoped"));
+        assert_eq!(pick("codex", &[win("primary", 0.2), win("secondary", 0.9)]), Some("secondary"));
         assert_eq!(pick("codex", &[win("primary", 0.0), win("secondary", 1.0)]), Some("secondary"));
-        assert_eq!(pick("claude", &[win("session", 0.1), win("weekly_all", 1.0)]), Some("weekly_all"));
-        assert_eq!(pick("cursor", &[win("included", 0.3), win("api", 0.9)]), Some("included"));
-        assert_eq!(pick("cursor", &[win("api", 0.9), win("on_demand", 0.95)]), Some("api"));
+        assert_eq!(pick("cursor", &[win("included", 0.3), win("api", 0.9)]), Some("api"));
+        assert_eq!(pick("claude", &[win("weekly_all", 0.60)]), Some("weekly_all"));
     }
 
     #[test]

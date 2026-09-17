@@ -307,12 +307,8 @@ function laneIs(w,limit){
 // The window a provider's ring shows: the same rule as ring_window in main.rs, which draws the tray
 function headlineOf(snap,id){
   const ws=snap.windows; if(!ws.length) return null;
-  const byId=x=>ws.find(w=>w.id===x)||null;
-  // A spent window blocks the tool whichever window it leads with, so it takes the ring (same rule as ring_window in main.rs)
-  if(id==='claude'||id==='codex'||id==='cursor'){ const spent=tightestOf(ws); if(spent&&spent.used>=1) return spent; }
-  if(id==='claude') return byId('session');
-  if(id==='codex') return ws[0];
-  if(id==='cursor') return byId('included')||byId('api');
+  // The ring shows the window that will stop you first — the fullest one (same rule as ring_window in main.rs)
+  if(id==='claude'||id==='codex'||id==='cursor') return tightestOf(ws)||ws[0];
   const fam=ws.filter(w=>laneFamily(w)===agPrefs.model), lanes=fam.length?fam:ws;
   if(agPrefs.limit!=='automatic'){ const w=tightestOf(lanes.filter(w=>laneIs(w,agPrefs.limit))); if(w) return w; }
   return tightestOf(lanes.filter(w=>w.used<1))||tightestOf(lanes)||lanes[0];
