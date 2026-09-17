@@ -321,16 +321,16 @@ function headlineOf(snap,id){
   if(agPrefs.limit!=='automatic'){ const w=tightestOf(lanes.filter(w=>laneIs(w,agPrefs.limit))); if(w) return w; }
   return tightestOf(lanes.filter(w=>w.used<1))||tightestOf(lanes)||lanes[0];
 }
-// One ring per limit window, outermost first — the same order the card lists them, so a provider
-// with a session and two weekly windows draws three. A dollar cell shows only the month (its
-// "today" figure is not a share of anything the ring could mean), and Antigravity keeps the single
-// lane its own settings choose.
+// One ring per limit window, fullest outermost — so the widest ring is always the one the figure
+// under the cell names, and a window filling up moves outward rather than staying hidden in the
+// middle. A dollar cell shows only the month (its "today" figure is not a share of anything the
+// ring could mean), and Antigravity keeps the single lane its own settings choose.
 function ringWindows(snap,id){
   const ws=snap.windows.filter(w=>w.count==null);
   if(!ws.length) return [];
   if(id==='gemini'){ const h=headlineOf(snap,id); return h?[h]:[]; }
   if(/_api$/.test(id)) return ws.slice(0,1);
-  return ws.slice(0,3);
+  return ws.slice().sort((a,b)=> b.used-a.used || (a.id<b.id?-1:1)).slice(0,3);
 }
 // Radii and stroke widths per ring count; the last entry of each is where the activity arc goes
 const RING_GEOM={
@@ -371,7 +371,8 @@ function renderRing(){
     const geom=RING_GEOM[Math.min(Math.max(rws.length,1),3)];
     let inner=`<circle cx="28" cy="28" r="22" fill="#2a2a2a"/>`;
     geom.rings.forEach(([r,w],i)=>{
-      inner+=`<circle cx="28" cy="28" r="${r}" fill="none" stroke="${TRACK}" stroke-width="${w}"/>`;
+      // the inner tracks sit on the dark disc, so they are drawn a shade lighter to stay visible
+      inner+=`<circle cx="28" cy="28" r="${r}" fill="none" stroke="${i?'#3a3a3a':TRACK}" stroke-width="${w}"/>`;
       const win=rws[i];
       if(win) inner+=svgArc(r,Math.min(win.used,1),tone(win.used),w);
     });
