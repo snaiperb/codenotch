@@ -35,7 +35,6 @@ const BUILTIN: [(&str, &str); 5] = [
     ("cursor", include_str!("../glyphs/cursor.svg")),
     ("grok", include_str!("../glyphs/grok.svg")),
     ("gemini", include_str!("../glyphs/gemini.svg")),
-    ("grok", include_str!("../glyphs/grok.svg")),
 ];
 
 /// Minimal SVG sanitising before inlining into the DOM: drop <script> blocks and on*="…" event

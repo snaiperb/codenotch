@@ -769,6 +769,9 @@ fn set_api_spend_config(app: AppHandle, cfg: ApiSpendConfig) {
     }
     apicost::request_refresh();
     tray::refresh_menu(&app);
+}
+
+#[tauri::command]
 fn get_glm(state: tauri::State<AppState>) -> usage::UsageSnapshot {
     state.glm.lock().unwrap().clone()
 }
@@ -1226,7 +1229,9 @@ fn ring_window<'a>(
     // 82% is not hidden behind a session at 0%. (Upstream pins each provider to its "declared"
     // window instead; the card still lists every window either way.)
     match provider {
-        "claude" | "codex" | "cursor" | "glm" => tightest(windows.iter()).or_else(|| windows.first()),
+        // Codex: only its core windows compete; Spark or code-review buckets never stand in for them
+        "codex" => tightest(windows.iter().filter(|w| w.id == "primary" || w.id == "secondary")),
+        "claude" | "cursor" | "glm" => tightest(windows.iter()).or_else(|| windows.first()),
         "grok" => windows.iter().find(|w| w.id == "credits").or_else(|| windows.first()),
         p if p.ends_with("_api") => windows.first(), // a dollar cell: the month, as its ring
         _ => antigravity_lane(windows, antigravity_limit, antigravity_model),
@@ -2209,8 +2214,8 @@ mod tests {
     #[test]
     fn codex_never_substitutes_an_extra_bucket_for_core_usage() {
         assert_eq!(pick("codex", &[win("spark", 0.1), win("primary", 0.32)]), Some("primary"));
-        assert_eq!(pick("codex", &[win("spark", 0.1), win("secondary", 0.4)]), None);
-        assert_eq!(pick("codex", &[win("secondary", 0.4)]), None);
+        assert_eq!(pick("codex", &[win("spark", 0.9), win("secondary", 0.4)]), Some("secondary"));
+        assert_eq!(pick("codex", &[win("secondary", 0.4)]), Some("secondary"));
         assert_eq!(pick("codex", &[win("spark", 0.1), win("code-review", 0.2)]), None);
     }
 
