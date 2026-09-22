@@ -101,4 +101,68 @@ final class AppLanguageTests: XCTestCase {
         L10n.testLocale = nil
         XCTAssertEqual(L10n.locale.identifier, "ru")
     }
+
+    func testUkrainianIsOfferedAndMapsToUk() {
+        XCTAssertTrue(AppLanguage.allCases.contains(.ukrainian))
+        XCTAssertEqual(AppLanguage.ukrainian.title, "Українська")
+        XCTAssertEqual(AppLanguage.ukrainian.locale?.identifier, "uk")
+    }
+
+    func testApplyUkrainianStoresTheOverride() {
+        L10n.apply(.ukrainian)
+        L10n.testLocale = nil
+        XCTAssertEqual(L10n.locale.identifier, "uk")
+    }
+
+    func testTraditionalChineseIsOfferedAndMapsToZhHant() {
+        XCTAssertTrue(AppLanguage.allCases.contains(.traditionalChinese))
+        XCTAssertEqual(AppLanguage.traditionalChinese.title, "繁體中文")
+        XCTAssertEqual(AppLanguage.traditionalChinese.locale?.identifier, "zh-Hant")
+    }
+
+    func testApplyTraditionalChineseStoresTheOverride() {
+        L10n.apply(.traditionalChinese)
+        L10n.testLocale = nil
+        XCTAssertEqual(L10n.locale.identifier, "zh-Hant")
+    }
+
+    func testApplyTraditionalChineseServesTraditionalCopy() {
+        L10n.apply(.traditionalChinese)
+        L10n.testLocale = nil
+        XCTAssertEqual(L10n.t("Always show"), "始終顯示")
+        XCTAssertEqual(L10n.t("Settings…"), "設定…")
+    }
+    func testKoreanIsOfferedAndMapsToKo() {
+        XCTAssertTrue(AppLanguage.allCases.contains(.korean))
+        XCTAssertEqual(AppLanguage.korean.title, "한국어")
+        XCTAssertEqual(AppLanguage.korean.locale?.identifier, "ko")
+    }
+
+    func testApplyKoreanStoresTheOverrideAndServesKoreanCopy() {
+        L10n.apply(.korean)
+        L10n.testLocale = nil
+        XCTAssertEqual(L10n.locale.identifier, "ko")
+        XCTAssertEqual(L10n.t("Always show"), "항상 표시")
+        XCTAssertEqual(L10n.t("Settings…"), "설정…")
+    }
+
+
+    func testUzbekIsOfferedAndMapsToUz() {
+        XCTAssertTrue(AppLanguage.allCases.contains(.uzbek))
+        XCTAssertEqual(AppLanguage.uzbek.title, "Oʻzbekcha")
+        XCTAssertEqual(AppLanguage.uzbek.locale?.identifier, "uz")
+    }
+
+    func testApplyUzbekStoresTheOverride() {
+        L10n.apply(.uzbek)
+        L10n.testLocale = nil
+        XCTAssertEqual(L10n.locale.identifier, "uz")
+    }
+
+    func testApplyUzbekServesUzbekCopy() {
+        L10n.apply(.uzbek)
+        L10n.testLocale = nil
+        XCTAssertEqual(L10n.t("Always show"), "Doimo")
+        XCTAssertEqual(L10n.t("Settings…"), "Sozlamalar…")
+    }
 }

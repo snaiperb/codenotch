@@ -73,4 +73,40 @@ final class CodexResetCreditsTests: XCTestCase {
         let withCredits = NotchLayout.cardHeight(windowCount: 2, hasResetCredits: true)
         XCTAssertGreaterThan(withCredits, plain)
     }
+
+    /// A successful endpoint response with no available credits is not card
+    /// content. It must neither draw the empty-state copy nor reserve space.
+    func testEmptyResetCreditsDoNotReserveCardSpace() {
+        var snapshot = ProviderSnapshot(
+            id: "codex", displayName: "Codex", glyph: .openai,
+            fidelity: .official, status: .ok, windows: []
+        )
+        snapshot.resetCredits = CodexResetCredits(availableCount: 0)
+
+        XCTAssertFalse(snapshot.hasAvailableResetCredits)
+        XCTAssertEqual(
+            NotchLayout.cardHeight(
+                windowCount: snapshot.windows.count,
+                hasResetCredits: snapshot.hasAvailableResetCredits
+            ),
+            NotchLayout.cardHeight(windowCount: snapshot.windows.count)
+        )
+    }
+
+    func testAvailableResetCreditsAreShownAndReserveSpace() {
+        var snapshot = ProviderSnapshot(
+            id: "codex", displayName: "Codex", glyph: .openai,
+            fidelity: .official, status: .ok, windows: []
+        )
+        snapshot.resetCredits = CodexResetCredits(availableCount: 1)
+
+        XCTAssertTrue(snapshot.hasAvailableResetCredits)
+        XCTAssertGreaterThan(
+            NotchLayout.cardHeight(
+                windowCount: snapshot.windows.count,
+                hasResetCredits: snapshot.hasAvailableResetCredits
+            ),
+            NotchLayout.cardHeight(windowCount: snapshot.windows.count)
+        )
+    }
 }

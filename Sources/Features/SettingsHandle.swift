@@ -74,7 +74,7 @@ struct SettingsOrb: View {
     /// Reduce transparency means "no see-through chrome", which for the orb is
     /// the solid style — the same precedence the Settings window applies to its
     /// own translucent chrome.
-    private var glassy: Bool { surfaceStyle.effective == .glass && !reduceTransparency }
+    private var glassy: Bool { surfaceStyle.isGlass && !reduceTransparency }
 
     /// The resting arc, on a circle one gap inside the flare's own.
     ///
@@ -84,12 +84,13 @@ struct SettingsOrb: View {
     @ViewBuilder
     private var restingArc: some View {
         if glassy {
-            // `effective` is only ever `.glass` where `glassEffect` exists; the
+            // `isGlass` is only ever true where `glassEffect` exists; the
             // availability check is what tells the compiler so.
             if #available(macOS 26.0, *) {
                 Color.clear
                     .frame(width: 100, height: 100)
-                    .glassEffect(.regular, in: Rectangle())
+                    .glassEffect(surfaceStyle.glass, in: Rectangle())
+                    .background { if let dim = surfaceStyle.glassDim { Rectangle().fill(dim) } }
                     // The band's own inset cancels the extra stroke width here,
                     // so this is the same circle the stroked arc follows.
                     .frame(width: arcRadius * 2 + NotchLayout.orbStroke,
@@ -115,7 +116,8 @@ struct SettingsOrb: View {
             if #available(macOS 26.0, *) {
                 Color.clear
                     .frame(width: 100, height: 100)
-                    .glassEffect(.regular.interactive(), in: Rectangle())
+                    .glassEffect(surfaceStyle.glass.interactive(), in: Rectangle())
+                    .background { if let dim = surfaceStyle.glassDim { Rectangle().fill(dim) } }
                     .frame(width: NotchLayout.orbDiameter, height: NotchLayout.orbDiameter)
                     .clipShape(Circle())
             }

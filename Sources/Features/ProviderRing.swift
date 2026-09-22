@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// The ring around a provider glyph: a grey track with a coloured arc that
@@ -12,6 +13,7 @@ struct ProviderRing: View {
     /// there is no arc to draw, and inventing one would be a lie in a shape.
     let usedFraction: Double?
     let glyph: ProviderGlyph
+    var customIconFilename: String? = nil
     var isStale: Bool = false
     /// Blocked right now. Shown as spent whatever the arc says, because that is
     /// what it means for you — a ring reading 16% while the account is paused
@@ -29,20 +31,35 @@ struct ProviderRing: View {
     var weeklyFraction: Double?
     /// Where the user asked for it, if at all.
     var weeklyRing: WeeklyRing = .off
+    var bandOverride: UsageBand? = nil
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.codenotchReduceTransparency) private var reduceTransparency
+    @Environment(\.usageWatchLimit) private var watchLimit
+    @Environment(\.usageCriticalLimit) private var criticalLimit
     @Environment(\.codenotchAccentColor) private var accentColor
+    @Environment(\.weeklyRingDashed) private var weeklyRingDashed
     @State private var spin: Double = 0
 
     private var band: UsageBand {
-        isBlocked ? .exhausted : UsageBand.band(for: usedFraction ?? 0)
+        guard !isBlocked else { return .exhausted }
+        if let bandOverride { return bandOverride }
+        return UsageBand.band(for: usedFraction ?? 0, watchLimit: watchLimit, criticalLimit: criticalLimit)
     }
     private var sweep: CGFloat { CGFloat(min(max(usedFraction ?? 0, 0), 1)) }
-    private var localSweep: CGFloat { CGFloat(min(max(localContextFraction ?? 1, 0), 1)) }
+    private var localSweep: CGFloat { Self.localSweep(for: localContextFraction) }
+    /// The floor is a drawing decision only — the number under the ring and in
+    /// the card stays true.
+    static func localSweep(for contextFraction: Double?) -> CGFloat {
+        guard let contextFraction else { return 1 }
+        return max(NotchLayout.localArcMinimumSweep, CGFloat(min(max(contextFraction, 0), 1)))
+    }
+    private var primaryColor: Color {
+        isStale ? Palette.textSecondary : band.color(accent: accentColor)
+    }
 
     private var weeklyBand: UsageBand {
-        isBlocked ? .exhausted : UsageBand.band(for: weeklyFraction ?? 0)
+        isBlocked ? .exhausted : UsageBand.band(for: weeklyFraction ?? 0, watchLimit: watchLimit, criticalLimit: criticalLimit)
     }
     private var weeklySweep: CGFloat { CGFloat(min(max(weeklyFraction ?? 0, 0), 1)) }
 
@@ -122,7 +139,8 @@ struct ProviderRing: View {
                     Circle()
                         .inset(by: inset)
                         .stroke(Palette.ringTrack,
-                                style: StrokeStyle(lineWidth: NotchLayout.weeklyRingStroke))
+                                style: StrokeStyle(lineWidth: NotchLayout.weeklyRingStroke,
+                                                   dash: weeklyRingDashed ? [4, 2] : []))
                         .opacity(reduceTransparency ? 1 : 0.7)
 
                     Circle()
@@ -131,7 +149,8 @@ struct ProviderRing: View {
                         .stroke(
                             weeklyBand.color(accent: accentColor),
                             style: StrokeStyle(lineWidth: NotchLayout.weeklyRingStroke,
-                                               lineCap: .round)
+                                               lineCap: weeklyRingDashed ? .butt : .round,
+                                               dash: weeklyRingDashed ? [4, 2] : [])
                         )
                         .opacity(reduceTransparency ? 1 : 0.8)
                         .rotationEffect(.degrees(-90))
@@ -139,7 +158,7 @@ struct ProviderRing: View {
                         .animation(NotchMotion.reading, value: weeklyBand)
                 }
 
-                ProviderGlyphView(glyph: glyph)
+                ProviderGlyphView(glyph: glyph, customIconFilename: customIconFilename)
                     .foregroundStyle(Palette.textPrimary)
                     // A spent limit dims its glyph so the ring reads as "waiting".
                     // Under reduce-transparency, boost opacity so it stays legible without low alpha.
@@ -184,7 +203,6 @@ private struct ActivityArc: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.codenotchReduceTransparency) private var reduceTransparency
-    @State private var spinning = false
     @State private var pulsing = false
 
     /// How much of the circle the moving arc covers.
@@ -210,23 +228,21 @@ private struct ActivityArc: View {
     /// told apart from a busy one at a glance.
     private var queued: Bool { summary.queued > 0 }
 
+    /// Turned by Core Animation, not by SwiftUI.
+    ///
+    /// A `repeatForever` rotation re-runs the hosting view's layout on every
+    /// frame, and the notch is one hosting view: while any session was working
+    /// that alone kept the app near 4% of a core, which is most of the time
+    /// for anyone who leaves Claude Code running. A layer animation is carried
+    /// out by the render server and costs the app nothing between frames.
     private var spinner: some View {
-        Circle()
-            .inset(by: inset)
-            .trim(from: 0, to: queued ? 1 : arcFraction)
-            .stroke(
-                summary.color,
-                style: StrokeStyle(lineWidth: NotchLayout.activityStroke, lineCap: .round,
-                                   dash: queued ? [0.01, NotchLayout.activityStroke * 2.2] : [])
-            )
-            .rotationEffect(.degrees(spinning ? 360 : 0))
-            .onAppear {
-                guard !reduceMotion else { return }
-                withAnimation(.linear(duration: 1.1).repeatForever(autoreverses: false)) {
-                    spinning = true
-                }
-            }
-            .onDisappear { spinning = false }
+        SpinningArc(
+            color: summary.color,
+            arcFraction: queued ? 1 : arcFraction,
+            dashed: queued,
+            inset: inset,
+            turns: !reduceMotion
+        )
     }
 
     private var pulse: some View {
@@ -260,6 +276,7 @@ struct ProviderCell: View {
             ProviderRing(
                 usedFraction: snapshot.localModel == nil && snapshot.hasReading ? snapshot.ringFraction : nil,
                 glyph: snapshot.glyph,
+                customIconFilename: snapshot.customIconFilename,
                 isStale: snapshot.status.isStale || !snapshot.hasReading,
                 isBlocked: snapshot.block != nil,
                 activity: activity,
@@ -267,7 +284,8 @@ struct ProviderCell: View {
                 localPerformance: snapshot.localPerformance,
                 localContextFraction: snapshot.localContextFraction,
                 weeklyFraction: snapshot.hasReading ? snapshot.weeklyFraction : nil,
-                weeklyRing: weeklyRing
+                weeklyRing: weeklyRing,
+                bandOverride: snapshot.bandOverride
             )
             Text(readingText)
                 .font(Typography.percent)
@@ -306,5 +324,128 @@ struct ProviderCell: View {
         guard let ledger = snapshot.localLedger else { return "" }
         let context = snapshot.localContextFraction.map { ", Context \(Percent.text(for: $0))% full" } ?? ""
         return "\(context), Tokens today \(ledger.tokensTodayText), \(ledger.requestsTodayText) requests"
+    }
+}
+
+private struct WeeklyRingDashedKey: EnvironmentKey {
+    static let defaultValue: Bool = false
+}
+
+extension EnvironmentValues {
+    var weeklyRingDashed: Bool {
+        get { self[WeeklyRingDashedKey.self] }
+        set { self[WeeklyRingDashedKey.self] = newValue }
+    }
+}
+
+/// The working arc as a shape layer: a quarter of the activity circle from
+/// 3 o'clock clockwise, or the whole circle as dots while requests are queued,
+/// turning clockwise once every 1.1 seconds.
+private struct SpinningArc: NSViewRepresentable {
+    let color: Color
+    let arcFraction: CGFloat
+    let dashed: Bool
+    let inset: CGFloat
+    let turns: Bool
+
+    func makeNSView(context: Context) -> SpinningArcView { SpinningArcView() }
+
+    func updateNSView(_ view: SpinningArcView, context: Context) {
+        view.configure(color: NSColor(color), arcFraction: arcFraction,
+                       dashed: dashed, inset: inset, turns: turns)
+    }
+}
+
+final class SpinningArcView: NSView {
+    static let turnDuration: CFTimeInterval = 1.1
+    static let animationKey = "turn"
+
+    let arc = CAShapeLayer()
+    private var color: NSColor = .white
+    private var inset: CGFloat = 0
+    private var turns = true
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        arc.fillColor = nil
+        arc.lineCap = .round
+        arc.lineWidth = NotchLayout.activityStroke
+        arc.strokeStart = 0
+        layer?.addSublayer(arc)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
+
+    /// Decoration only: clicks belong to the ring and the notch beneath it.
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    func configure(color: NSColor, arcFraction: CGFloat, dashed: Bool, inset: CGFloat, turns: Bool) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        self.color = color
+        self.inset = inset
+        self.turns = turns
+        arc.strokeEnd = arcFraction
+        arc.lineDashPattern = dashed
+            ? [0.01, NSNumber(value: Double(NotchLayout.activityStroke * 2.2))]
+            : nil
+        applyColor()
+        rebuildPath()
+        CATransaction.commit()
+        updateAnimation()
+    }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        rebuildPath()
+        CATransaction.commit()
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateAnimation()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        applyColor()
+    }
+
+    private func applyColor() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            arc.strokeColor = color.cgColor
+        }
+    }
+
+    /// The layer's own coordinates run y-up, so a visually clockwise circle
+    /// starting at 3 o'clock is drawn with decreasing angles — the same start
+    /// and direction as SwiftUI's `Circle().trim(from: 0, …)`.
+    private func rebuildPath() {
+        arc.frame = bounds
+        let radius = max(0, min(bounds.width, bounds.height) / 2 - inset)
+        let path = CGMutablePath()
+        path.addArc(center: CGPoint(x: bounds.midX, y: bounds.midY), radius: radius,
+                    startAngle: 0, endAngle: -2 * .pi, clockwise: true)
+        arc.path = path
+    }
+
+    /// Re-added whenever it has gone missing: AppKit drops layer animations
+    /// when a window leaves the screen, and the notch's panel does.
+    private func updateAnimation() {
+        guard turns, window != nil else {
+            arc.removeAnimation(forKey: Self.animationKey)
+            return
+        }
+        guard arc.animation(forKey: Self.animationKey) == nil else { return }
+        let turn = CABasicAnimation(keyPath: "transform.rotation.z")
+        turn.fromValue = 0
+        turn.toValue = -2 * Double.pi
+        turn.duration = Self.turnDuration
+        turn.repeatCount = .infinity
+        turn.isRemovedOnCompletion = false
+        arc.add(turn, forKey: Self.animationKey)
     }
 }

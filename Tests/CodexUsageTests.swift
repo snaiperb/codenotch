@@ -516,6 +516,110 @@ final class CodexActivityTests: XCTestCase {
         XCTAssertNil(CodexRolloutActivity.state(from: url))
     }
 
+    /// The scan reads the rollout backwards in 256 KB windows; everything
+    /// below builds files around that size on purpose.
+    private static let windowBytes = 256 * 1024
+
+    private func rollout(data: Data) throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodenotchCodexRollout-\(UUID().uuidString).jsonl")
+        try data.write(to: url)
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        return url
+    }
+
+    /// A JSONL line of exactly `bytes` that parses as a record but carries no
+    /// lifecycle type — the padding the scan has to step over.
+    private func filler(_ bytes: Int) -> Data {
+        var data = Data(#"{"pad":""#.utf8)
+        data.append(contentsOf: [UInt8](repeating: UInt8(ascii: "x"), count: bytes - 11))
+        data.append(contentsOf: Data(#""}"#.utf8))
+        data.append(UInt8(ascii: "\n"))
+        return data
+    }
+
+    /// Explicit, even though the lifecycle tests above run on small files:
+    /// nothing before the windowed scan can be allowed to skip this case.
+    func testARolloutSmallerThanOneWindowIsReadWhole() throws {
+        let url = try rollout([
+            #"{"type":"event_msg","payload":{"type":"task_started"}}"#,
+            #"{"type":"event_msg","payload":{"type":"task_complete"}}"#
+        ])
+        XCTAssertLessThan(
+            try FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int ?? .max,
+            Self.windowBytes
+        )
+        XCTAssertEqual(CodexRolloutActivity.state(from: url), .success)
+    }
+
+    /// The newest 256 KB is all filler; the only lifecycle event sits an
+    /// entire window back and still has to be reached.
+    func testAnEventInAnEarlierWindowIsStillFound() throws {
+        var data = Data(#"{"type":"event_msg","payload":{"type":"task_complete"}}"#.utf8)
+        data.append(UInt8(ascii: "\n"))
+        data.append(filler(Self.windowBytes + 10_000))
+        let url = try rollout(data: data)
+        XCTAssertEqual(CodexRolloutActivity.state(from: url), .success)
+    }
+
+    /// The window boundary cuts a line in half; the fragment is carried into
+    /// the earlier window, where the rest of the line lives. Without the
+    /// carry this event is silently lost.
+    func testALifecycleLineCutByTheWindowBoundaryIsReassembled() throws {
+        let event = Data(#"{"type":"event_msg","payload":{"type":"task_complete"}}"#.utf8)
+        var data = filler(970)              // the event starts at offset 970
+        data.append(event)
+        data.append(UInt8(ascii: "\n"))
+        data.append(filler(Self.windowBytes + 1000 - data.count))
+
+        let boundary = data.count - Self.windowBytes
+        XCTAssertTrue(970 < boundary && boundary < 970 + event.count,
+                      "the fixture must place the event across the boundary")
+
+        let url = try rollout(data: data)
+        XCTAssertEqual(CodexRolloutActivity.state(from: url), .success)
+    }
+
+    /// The boundary falls exactly on a newline: the window's first line is
+    /// whole, and the earlier window's last line ends without its newline.
+    /// Carrying that whole line back glued the two into one line of invalid
+    /// JSON, and the event before the boundary was lost.
+    func testALineEndingExactlyOnTheWindowBoundaryIsNotGluedToTheNext() throws {
+        let event = Data(#"{"type":"event_msg","payload":{"type":"task_complete"}}"#.utf8)
+        var data = filler(970)
+        data.append(event)
+        let newline = data.count           // the event's own newline sits here
+        data.append(UInt8(ascii: "\n"))
+        data.append(filler(Self.windowBytes - 1))
+
+        XCTAssertEqual(data.count - Self.windowBytes, newline,
+                       "the fixture must put the event's newline exactly on the boundary")
+
+        let url = try rollout(data: data)
+        XCTAssertEqual(CodexRolloutActivity.state(from: url), .success)
+    }
+
+    /// The tail of a live rollout is often half a line — the writer was
+    /// mid-append when the tick landed. It must not eat the event behind it.
+    func testAHalfWrittenTailLineDoesNotHideTheEventBehindIt() throws {
+        var data = Data(#"{"type":"event_msg","payload":{"type":"task_complete"}}"#.utf8)
+        data.append(UInt8(ascii: "\n"))
+        data.append(Data(#"{"type":"event_msg","payload":{"ty"#.utf8))
+        let url = try rollout(data: data)
+        XCTAssertEqual(CodexRolloutActivity.state(from: url), .success)
+    }
+
+    /// Deliberate, and stated in the PR: a lifecycle event further than four
+    /// windows (1 MB) from the end is never seen — the scan stays bounded so
+    /// a mid-turn rollout's far-behind `task_started` is never paid for.
+    func testAnEventBeyondTheScanCapIsNotFound() throws {
+        var data = Data(#"{"type":"event_msg","payload":{"type":"task_complete"}}"#.utf8)
+        data.append(UInt8(ascii: "\n"))
+        data.append(filler(4 * Self.windowBytes + 100))
+        let url = try rollout(data: data)
+        XCTAssertNil(CodexRolloutActivity.state(from: url))
+    }
+
     func testARolloutWrittenJustNowIsBusy() throws {
         let s = try XCTUnwrap(CodexActivityMonitor.session(
             id: "codex.x", name: "Codex",
@@ -634,6 +738,202 @@ final class CodexDesktopActivityTests: XCTestCase {
         XCTAssertNil(CodexStore.newestDesktopThread(
             in: URL(fileURLWithPath: "/nonexistent/codex-dev.db")
         ))
+    }
+}
+
+/// `CodexStoreCache` answers from memory while the store's `(mtime, size)`
+/// stamp holds — these pin down when the cached answer stands and when the
+/// database is opened again, since a stale one would keep showing a session
+/// that moved on.
+final class CodexStoreCacheTests: XCTestCase {
+    private var dir: URL!
+
+    override func setUpWithError() throws {
+        dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodenotchStoreCache-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    }
+
+    override func tearDownWithError() throws {
+        try? FileManager.default.removeItem(at: dir)
+    }
+
+    /// A store of the shape `CodexStore.newestRollout` reads. Small pages and
+    /// a `pad` column so a later `INSERT` is guaranteed to grow the file —
+    /// otherwise a new row can fit inside a page the file already had and
+    /// the size half of the stamp never moves.
+    private func makeStore(rollouts: [(path: String, updatedMs: Int)]) throws -> URL {
+        let url = dir.appendingPathComponent("state_5.sqlite")
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &db), SQLITE_OK)
+        defer { sqlite3_close(db) }
+        sqlite3_exec(db, "PRAGMA page_size=512", nil, nil, nil)
+        sqlite3_exec(db, """
+            CREATE TABLE threads (rollout_path TEXT, archived INTEGER,
+                                  updated_at_ms INTEGER, pad TEXT)
+            """, nil, nil, nil)
+        for (path, ms) in rollouts {
+            sqlite3_exec(db, "INSERT INTO threads VALUES ('\(path)', 0, \(ms), '')",
+                         nil, nil, nil)
+        }
+        return url
+    }
+
+    private func updateStore(_ url: URL, sql: String) {
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &db), SQLITE_OK)
+        defer { sqlite3_close(db) }
+        XCTAssertEqual(sqlite3_exec(db, sql, nil, nil, nil), SQLITE_OK)
+    }
+
+    private func rolloutFile(_ name: String) throws -> String {
+        let url = dir.appendingPathComponent(name)
+        try Data().write(to: url)
+        return url.path
+    }
+
+    private func size(of url: URL) throws -> UInt64 {
+        ((try FileManager.default.attributesOfItem(atPath: url.path))[.size]
+            as? NSNumber)?.uint64Value ?? 0
+    }
+
+    /// `setAttributes`, not a real write's timestamp: the stamp compares
+    /// `Date`s exactly, so both calls must land the same value rather than
+    /// trusting the filesystem to round-trip one.
+    private func setMtime(_ date: Date, of url: URL) throws {
+        try FileManager.default.setAttributes([.modificationDate: date],
+                                              ofItemAtPath: url.path)
+    }
+
+    private let epoch = Date(timeIntervalSince1970: 1_788_000_000)
+
+    func testAnUnchangedStoreAnswersFromCache() throws {
+        // Same-length paths: the update below cannot change the file's size,
+        // so only the stamp is being exercised.
+        let pathA = try rolloutFile("a.jsonl")
+        let pathB = try rolloutFile("b.jsonl")
+        XCTAssertEqual(pathA.count, pathB.count)
+        let store = try makeStore(rollouts: [(pathA, 2), (pathB, 1)])
+        try setMtime(epoch, of: store)
+
+        let cache = CodexStoreCache()
+        XCTAssertEqual(cache.newestRollout(in: store)?.path, pathA)
+
+        let sizeBefore = try size(of: store)
+        updateStore(store, sql: "UPDATE threads SET rollout_path='\(pathB)' WHERE updated_at_ms=2")
+        try setMtime(epoch, of: store)
+        XCTAssertEqual(try size(of: store), sizeBefore,
+                       "the fixture must keep the size identical for the stamp to hold")
+
+        XCTAssertEqual(cache.newestRollout(in: store)?.path, pathA,
+                       "same (mtime, size) — the cached answer must stand")
+    }
+
+    func testAnMtimeChangeRescans() throws {
+        let pathA = try rolloutFile("a.jsonl")
+        let pathB = try rolloutFile("b.jsonl")
+        XCTAssertEqual(pathA.count, pathB.count)
+        let store = try makeStore(rollouts: [(pathA, 2), (pathB, 1)])
+        try setMtime(epoch, of: store)
+
+        let cache = CodexStoreCache()
+        XCTAssertEqual(cache.newestRollout(in: store)?.path, pathA)
+
+        updateStore(store, sql: "UPDATE threads SET rollout_path='\(pathB)' WHERE updated_at_ms=2")
+        try setMtime(epoch.addingTimeInterval(60), of: store)
+
+        XCTAssertEqual(cache.newestRollout(in: store)?.path, pathB,
+                       "a moved mtime is a changed store")
+    }
+
+    func testASizeChangeAloneRescans() throws {
+        let pathA = try rolloutFile("a.jsonl")
+        let pathB = try rolloutFile("b.jsonl")
+        let pathC = try rolloutFile("c.jsonl")
+        let store = try makeStore(rollouts: [(pathA, 2), (pathB, 1)])
+        try setMtime(epoch, of: store)
+
+        let cache = CodexStoreCache()
+        XCTAssertEqual(cache.newestRollout(in: store)?.path, pathA)
+
+        // Mtime pinned back to what the stamp recorded; only the size moved.
+        let pad = String(repeating: "x", count: 4096)
+        updateStore(store, sql: "INSERT INTO threads VALUES ('\(pathC)', 0, 3, '\(pad)')")
+        try setMtime(epoch, of: store)
+
+        XCTAssertEqual(cache.newestRollout(in: store)?.path, pathC,
+                       "a grown file is a changed store even at the same mtime")
+    }
+
+    /// Codex's writes land in the `-wal` before the database proper — the
+    /// main file's mtime only moves at checkpoint — so the stamp has to see
+    /// the wal, or writes between checkpoints are invisible to it.
+    func testAWalChangeAloneRescans() throws {
+        let pathA = try rolloutFile("a.jsonl")
+        let pathB = try rolloutFile("b.jsonl")
+        XCTAssertEqual(pathA.count, pathB.count)
+        let store = try makeStore(rollouts: [(pathA, 2), (pathB, 1)])
+        try setMtime(epoch, of: store)
+
+        let cache = CodexStoreCache()
+        XCTAssertEqual(cache.newestRollout(in: store)?.path, pathA)
+
+        updateStore(store, sql: "UPDATE threads SET rollout_path='\(pathB)' WHERE updated_at_ms=2")
+        try setMtime(epoch, of: store)
+        XCTAssertEqual(cache.newestRollout(in: store)?.path, pathA,
+                       "database stamp unchanged — still cached")
+
+        // The store was built in the default rollback journal mode, so this
+        // stray file is never opened by SQLite — only its stat matters.
+        try Data("wal".utf8).write(to: URL(fileURLWithPath: store.path + "-wal"))
+        addTeardownBlock { try? FileManager.default.removeItem(atPath: store.path + "-wal") }
+        XCTAssertEqual(cache.newestRollout(in: store)?.path, pathB)
+    }
+
+    /// A cached rollout path whose file has gone away is asked for again —
+    /// the next row down may still exist.
+    func testACachedPathWhoseFileIsGoneIsAskedForAgain() throws {
+        let pathA = try rolloutFile("a.jsonl")
+        let pathB = try rolloutFile("b.jsonl")
+        let store = try makeStore(rollouts: [(pathA, 2), (pathB, 1)])
+        try setMtime(epoch, of: store)
+
+        let cache = CodexStoreCache()
+        XCTAssertEqual(cache.newestRollout(in: store)?.path, pathA)
+
+        try FileManager.default.removeItem(atPath: pathA)
+        XCTAssertEqual(cache.newestRollout(in: store)?.path, pathB)
+    }
+
+    /// The desktop catalogue has no file to re-check — the stamp is the
+    /// whole gate, in both directions.
+    func testTheDesktopCatalogueFollowsTheSameStamp() throws {
+        let store = dir.appendingPathComponent("codex-dev.db")
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(store.path, &db), SQLITE_OK)
+        sqlite3_exec(db, """
+            CREATE TABLE local_thread_catalog (
+                thread_id TEXT, display_title TEXT NOT NULL,
+                source_updated_at REAL NOT NULL, source_kind TEXT)
+            """, nil, nil, nil)
+        sqlite3_exec(db, """
+            INSERT INTO local_thread_catalog
+            VALUES ('t', 'First', 1788582173.0, 'chatgpt')
+            """, nil, nil, nil)
+        sqlite3_close(db)
+        try setMtime(epoch, of: store)
+
+        let cache = CodexStoreCache()
+        XCTAssertEqual(cache.newestDesktopThread(in: store)?.title, "First")
+
+        // 'First' and 'Other' are the same length: size cannot move.
+        updateStore(store, sql: "UPDATE local_thread_catalog SET display_title='Other' WHERE thread_id='t'")
+        try setMtime(epoch, of: store)
+        XCTAssertEqual(cache.newestDesktopThread(in: store)?.title, "First",
+                       "unchanged stamp — the cached row must stand")
+
+        try setMtime(epoch.addingTimeInterval(60), of: store)
+        XCTAssertEqual(cache.newestDesktopThread(in: store)?.title, "Other")
     }
 }
 

@@ -40,6 +40,9 @@ final class NotchRenderTests: XCTestCase {
             content: NotchRootView(model: model)
                 .frame(width: size.width, height: size.height)
                 .environment(\.codenotchReduceTransparency, reduceTransparency)
+                // The system material is not renderable offscreen; everything
+                // around it is. See TASKS.md, "The hardware's band stays black".
+                .environment(\.codenotchHeadlessGlass, true)
                 // Dark, the scheme the solid style pins its own panel to.
                 //
                 // `Palette.ringTrack` and its neighbours became translucent
@@ -270,10 +273,23 @@ final class NotchRenderTests: XCTestCase {
         }
     }
 
-    /// The glass style reaches the notch whether it is open or closed, as requested.
+    /// The glass style reaches the notch whether it is open or closed, as
+    /// requested: folded, the body fill is turned off and nothing of ours is
+    /// painted in its place.
+    ///
+    /// The system material is left out of the render (see
+    /// `\.codenotchHeadlessGlass`), so this pins the one half that is ours —
+    /// that the fill really did step aside — rather than what glass looks like.
+    ///
+    /// Three cells, where its neighbours render four: the first
+    /// `ImageRenderer` render of a given pixel size in a test method can hand
+    /// back the *previous* method's image at that size, and the method before
+    /// this one paints the same panel size opaque black, so at four cells this
+    /// read 1.0 in the full run and 0 alone. A size no other pixel test asks
+    /// for keeps the hand-me-down out.
     func testTheFoldedPillIsTransparentInTheGlassStyle() {
         for edge in NotchEdge.allCases {
-            let m = model(edge: edge)
+            let m = model(edge: edge, cells: 3)
             m.surfaceStyle = .glass
             m.isExpanded = false
             guard let rep = render(m) else {
@@ -293,6 +309,48 @@ final class NotchRenderTests: XCTestCase {
             XCTAssertEqual(
                 colour?.alphaComponent ?? 1, 0, accuracy: 0.01,
                 "\(edge): the folded pill is opaque in the glass style"
+            )
+        }
+    }
+
+    /// The other half of the same pixel: where `glass` leaves the surface to
+    /// the system, `darkGlass` puts a wash of ours underneath it, and that wash
+    /// *is* renderable offscreen. So the dim is the one thing about the dark
+    /// glass style a headless test can honestly check.
+    ///
+    /// Five cells, a panel size no other pixel test renders: the first
+    /// `ImageRenderer` render of a given pixel size in a test method can hand
+    /// back the *previous* method's image at that size, and the folded-pill
+    /// test above — which sorts right before this one and expects nothing at
+    /// this very probe — already claims three. A size of its own keeps this
+    /// test's dim out of that one's image.
+    func testTheFoldedPillCarriesTheDimInTheDarkGlassStyle() throws {
+        guard #available(macOS 26.0, *) else {
+            throw XCTSkip("no Liquid Glass below macOS 26, so darkGlass resolves to solid")
+        }
+        for edge in NotchEdge.allCases {
+            let m = model(edge: edge, cells: 5)
+            m.surfaceStyle = .darkGlass
+            m.isExpanded = false
+            guard let rep = render(m) else {
+                XCTFail("\(edge): no image")
+                continue
+            }
+            let place = NotchPlacement(edge: edge, panelSize: m.panelSize)
+            let onBezel = place.point(
+                along: m.slack + m.shapeLength / 2, across: 1
+            )
+            let colour = rep.colorAt(
+                x: min(rep.pixelsWide - 1, max(0, Int(onBezel.x))),
+                y: min(rep.pixelsHigh - 1, max(0, Int(onBezel.y)))
+            )
+            XCTAssertEqual(
+                colour?.alphaComponent ?? 0, 0.60, accuracy: 0.03,
+                "\(edge): the dark glass dim is not drawn beneath the folded pill"
+            )
+            XCTAssertLessThan(
+                colour?.brightnessComponent ?? 1, 0.05,
+                "\(edge): the dark glass dim is not black"
             )
         }
     }
@@ -398,6 +456,22 @@ final class PanelSizingIntegrityTests: XCTestCase {
             XCTAssertNil(window.appearance,
                          "the glass style pinned an appearance instead of inheriting one")
         }
+    }
+
+    /// Dark glass is `Glass.clear` over a black dim of ours, and it must always
+    /// read dark regardless of the Mac's appearance — same pin as solid, so
+    /// `Palette`'s frame hexes hold.
+    func testTheDarkGlassStyleForcesTheDarkAppearance() {
+        let controller = NotchWindowController()
+        controller.model.surfaceStyle = .darkGlass
+        controller.show()
+        defer { controller.stop() }
+
+        guard let window = controller.panelContentViewForTesting?.window else {
+            return XCTFail("no panel")
+        }
+        XCTAssertEqual(window.appearance?.name, .darkAqua,
+                       "the dark glass style left the panel following the Mac's appearance")
     }
 
     /// Reduce transparency means "no see-through chrome", and the window has to
@@ -626,12 +700,12 @@ final class AlwaysShowTests: XCTestCase {
     func testClickingTheNotchDoesNotUndoAlwaysShow() {
         let controller = NotchWindowController()
         controller.apply(.alwaysShow)
-        XCTAssertTrue(controller.model.staysOpen)
 
         controller.togglePinned()   // a click on the bar
-        XCTAssertTrue(controller.model.staysOpen,
+        XCTAssertTrue(controller.model.isAlwaysOn,
                       "a click downgraded Always show to hover")
         XCTAssertTrue(controller.model.isExpanded)
+        XCTAssertTrue(controller.model.isPinned)
     }
 
     /// However many times. The report said "sometimes", which is what a toggle
@@ -639,8 +713,10 @@ final class AlwaysShowTests: XCTestCase {
     func testItSurvivesRepeatedClicks() {
         let controller = NotchWindowController()
         controller.apply(.alwaysShow)
+
         for _ in 0..<5 { controller.togglePinned() }
-        XCTAssertTrue(controller.model.staysOpen)
+        XCTAssertTrue(controller.model.isAlwaysOn)
+        XCTAssertTrue(controller.model.isExpanded)
     }
 
     /// The transient pin still works where it is the only thing holding the
@@ -648,22 +724,13 @@ final class AlwaysShowTests: XCTestCase {
     func testAPinInHoverModeIsStillATogggle() {
         let controller = NotchWindowController()
         controller.apply(.onHover)
-        XCTAssertFalse(controller.model.staysOpen)
+
+        XCTAssertFalse(controller.model.isPinned)
 
         controller.togglePinned()
-        XCTAssertTrue(controller.model.staysOpen, "clicking no longer pins")
+        XCTAssertTrue(controller.model.isPinned, "clicking no longer pins")
         controller.togglePinned()
-        XCTAssertFalse(controller.model.staysOpen, "clicking no longer unpins")
-    }
-
-    /// Switching to hover has to clear a pin left over from before, or the
-    /// notch stays open and the new choice looks ignored.
-    func testSwitchingToHoverClearsAStalePin() {
-        let controller = NotchWindowController()
-        controller.apply(.onHover)
-        controller.togglePinned()
-        controller.apply(.onHover)
-        XCTAssertFalse(controller.model.staysOpen)
+        XCTAssertFalse(controller.model.isPinned, "clicking no longer unpins")
     }
 
     /// And so does hiding — a pinned notch that is ordered out still counts as
@@ -671,19 +738,50 @@ final class AlwaysShowTests: XCTestCase {
     func testHidingClearsBothHolds() {
         let controller = NotchWindowController()
         controller.apply(.alwaysShow)
+
+        // Both holds on at once (an edge case of clicking while always-on)
+        controller.togglePinned()
+
         controller.apply(.hidden)
-        XCTAssertFalse(controller.model.staysOpen)
+
+        XCTAssertFalse(controller.model.isPinned)
+        XCTAssertFalse(controller.model.isExpanded)
+    }
+
+    /// Switching to hover has to clear a pin left over from before, or the
+    /// notch stays open and the new choice looks ignored.
+    func testSwitchingToHoverClearsAStalePin() {
+        let controller = NotchWindowController()
+        controller.apply(.alwaysShow)
+        controller.togglePinned()
+
+        // Changing to hover should wipe the pin and close the notch.
+        controller.apply(.onHover)
+
+        XCTAssertFalse(controller.model.isPinned)
         XCTAssertFalse(controller.model.isExpanded)
     }
 
     /// Coming back from hover to always-on, with a stale pin in between.
+    ///
+    /// Choosing the setting subsumes the pin, so what is left afterwards is a
+    /// notch held open by Always show and nothing else — a later click is an
+    /// ordinary pin again, and the full-screen fold is not held off in between.
     func testAlwaysShowOutlastsAPinAndAnUnpin() {
         let controller = NotchWindowController()
         controller.apply(.onHover)
+
         controller.togglePinned()      // pinned by hand
+        XCTAssertTrue(controller.model.isPinned)
+
         controller.apply(.alwaysShow)  // then chosen in Settings
-        controller.togglePinned()      // and clicked again
-        XCTAssertTrue(controller.model.staysOpen)
+        XCTAssertFalse(controller.model.isPinned,
+                       "the setting subsumes the pin; a stale one would hold the full-screen fold off")
+        XCTAssertTrue(controller.model.isExpanded)
+
+        controller.togglePinned()      // a click is a fresh pin, not an unpin
+        XCTAssertTrue(controller.model.isAlwaysOn)
+        XCTAssertTrue(controller.model.isExpanded) // still stays open
     }
 }
 
@@ -761,9 +859,12 @@ final class StaleAfterMarginTests: XCTestCase {
     /// that is the ordinary shape of an idle afternoon, not a fault.
     @MainActor
     func testOneFailedIdleAttemptDoesNotDimTheRing() async throws {
+        // The margin is generous on purpose: the assertion is about one failed
+        // attempt, not about timing, and 0.45s was close enough to the 0.2s
+        // sleep that a loaded CI runner crossed it.
         let store = UsageStore(
             providers: [FailingProvider()],
-            refreshInterval: 0.05, idleRefreshInterval: 0.15, staleAfter: 0.45,
+            refreshInterval: 0.05, idleRefreshInterval: 0.15, staleAfter: 3,
             archive: UsageArchive(defaults: defaults())
         )
         await store.refresh()

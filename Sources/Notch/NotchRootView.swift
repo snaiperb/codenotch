@@ -4,6 +4,8 @@ struct NotchRootView: View {
     @ObservedObject var model: NotchViewModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.codenotchReduceTransparency) private var reduceTransparency
+    @Environment(\.codenotchHeadlessGlass) private var headlessGlass
+    @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
         // Measured rather than assumed: the panel's real size is whatever
@@ -131,6 +133,14 @@ struct NotchRootView: View {
         .tint(model.accentColor.color)
         .environment(\.codenotchAccentColor, model.accentColor.color)
         .environment(\.notchSurfaceStyle, model.surfaceStyle)
+        .environment(\.tooltipSecondaryInk, TooltipGlassContrast.secondaryInk(
+            surfaceStyle: model.surfaceStyle,
+            colorScheme: colorScheme,
+            reduceTransparency: reduceTransparency
+        ))
+        .environment(\.weeklyRingDashed, model.weeklyRingDashed)
+        .environment(\.usageWatchLimit, model.watchLimit)
+        .environment(\.usageCriticalLimit, model.criticalLimit)
     }
 
     /// Opening and closing are not mirror images. Appearing, the arc waits its
@@ -153,23 +163,46 @@ struct NotchRootView: View {
         // Reduce transparency means "no see-through chrome", which for the
         // notch is the solid style — the same precedence the Settings window
         // applies to its own translucent chrome.
-        let glassy = model.surfaceStyle.effective == .glass
+        let glassy = model.surfaceStyle.isGlass
             && !reduceTransparency
 
         return ZStack {
             if glassy {
                 if #available(macOS 26.0, *) {
-                    Color.clear
-                        .frame(width: place.panelSize.width, height: place.panelSize.height)
-                        .glassEffect(.regular, in: Rectangle())
-                        .id(model.isExpanded)
+                    // The same layer twice, once without the material: an
+                    // offscreen `ImageRenderer` cannot draw the system glass
+                    // faithfully, so the pixel tests ask for the glass path
+                    // with the material left out and check the parts that are
+                    // ours. See TASKS.md, "The hardware's band stays black".
+                    if headlessGlass {
+                        Color.clear
+                            .frame(width: place.panelSize.width, height: place.panelSize.height)
+                            .background {
+                                if let dim = model.surfaceStyle.glassDim {
+                                    Rectangle().fill(dim)
+                                }
+                            }
+                            .id(model.isExpanded)
+                    } else {
+                        Color.clear
+                            .frame(width: place.panelSize.width, height: place.panelSize.height)
+                            .glassEffect(model.surfaceStyle.glass, in: Rectangle())
+                            .background {
+                                if let dim = model.surfaceStyle.glassDim {
+                                    Rectangle().fill(dim)
+                                }
+                            }
+                            .id(model.isExpanded)
+                    }
                 }
             }
             
             ZStack {
                 // Nothing of ours underneath: a wash of our own would override the
                 // Clear/Tinted choice in Appearance settings, which is the whole
-                // point of handing this surface to the system.
+                // point of handing this surface to the system. `darkGlass` is the
+                // one deliberate exception, and its dim sits behind the glass
+                // itself above, not here.
                 //
                 // No `else`: the solid fill below is mounted in every style anyway,
                 // and below macOS 26 `glassy` is always false, so it is simply left
@@ -382,7 +415,7 @@ struct NotchRootView: View {
                 blockMessage: snapshot.block?.summary(now: model.now),
                 hasTokenUsage: snapshot.tokenUsage != nil,
                 hasPlan: snapshot.plan != nil,
-                hasResetCredits: snapshot.resetCredits != nil,
+                hasResetCredits: snapshot.hasAvailableResetCredits,
                 localModelName: snapshot.localModel?.name,
                 showsLocalPerformance: snapshot.showsLocalPerformance,
                 localLedgerRows: snapshot.localLedgerRowCount,
@@ -415,7 +448,7 @@ struct NotchRootView: View {
                 blockMessage: snapshot.block?.summary(now: model.now),
                 hasTokenUsage: snapshot.tokenUsage != nil,
                 hasPlan: snapshot.plan != nil,
-                hasResetCredits: snapshot.resetCredits != nil,
+                hasResetCredits: snapshot.hasAvailableResetCredits,
                 localModelName: snapshot.localModel?.name,
                 showsLocalPerformance: snapshot.showsLocalPerformance,
                 localLedgerRows: snapshot.localLedgerRowCount,

@@ -148,6 +148,20 @@ actor ClaudeOAuthProvider: UsageProvider {
     }
 
     func fetchSnapshot() async throws -> ProviderSnapshot {
+        // A Deny is honoured by every source, not only the keychain (#98).
+        // Claude Desktop's cache and the CLI never needed this app's keychain
+        // access, which is exactly why they used to keep the ring filled after
+        // someone said no to it.
+        if keychain.isRefused {
+            throw UsageProviderError.accessDenied
+        }
+        // "Allow access…" was clicked: go straight to the keychain, so the
+        // dialogue the person asked for is the thing that answers — a cached
+        // or CLI reading would satisfy the refresh and the question would
+        // never be put.
+        if keychain.isAskingAgain {
+            return try await fetchFromKeychain()
+        }
         // Ahead of both the CLI and the back-off check. This is the cheapest
         // source and the only one that can never interrupt anyone: it reads a
         // file Claude Desktop has already written.
@@ -161,6 +175,10 @@ actor ClaudeOAuthProvider: UsageProvider {
         if let windows = await cliWindows() {
             return snapshot(windows: windows, plan: lastCLIPlan)
         }
+        return try await fetchFromKeychain()
+    }
+
+    private func fetchFromKeychain() async throws -> ProviderSnapshot {
         if Self.shouldHoldOff(until: retryNoEarlierThan, slack: backoffSlack),
            let retryNoEarlierThan {
             let remaining = retryNoEarlierThan.timeIntervalSinceNow
@@ -365,7 +383,17 @@ actor ClaudeOAuthProvider: UsageProvider {
         }
 
         let payload = try UsageResponse.decoder.decode(UsageResponse.self, from: data)
-        return snapshot(windows: payload.limitWindows(), plan: credentials?.subscriptionType)
+        let windows = payload.limitWindows()
+        // Answered, and signed in, but no limit in it: some Enterprise and team
+        // accounts come back this way (#178). An empty reading drew nothing and
+        // left "Waiting for the first reading…" up for good; say what happened.
+        guard !windows.isEmpty else {
+            Log.usage.notice("claude usage endpoint answered with no limit windows")
+            throw UsageProviderError.nothingMetered(
+                L10n.t("Claude answered, but listed no usage limits for this account. Some Enterprise and team plans don't report them.")
+            )
+        }
+        return snapshot(windows: windows, plan: credentials?.subscriptionType)
     }
 
     private func currentToken() throws -> String {

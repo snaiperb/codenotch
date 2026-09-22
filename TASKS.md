@@ -1287,6 +1287,13 @@ it and then notice when the answer changes.
       Dock at the bottom is nowhere near a right-edge notch, and centring on the
       visible area would slide that notch up and down every time the Dock hid
       itself, for no reason anyone could see.
+- [x] **Superseded by `2913f68`: every edge now anchors to `frame`.** Pinning to
+      `visibleFrame` meant the notch jumped whenever the Dock or menu bar
+      appeared, which moved a position the user had chosen.
+      `NotchGeometry.panelFrame` reads `frameValue` on all four edges;
+      `visibleFrameValue` is still declared on `ScreenDescribing` but no
+      production code reads it any more. The hardware-notch merge on the top
+      edge is decided in `NotchViewModel.adopt(screen:)`.
 - [x] `SideNotchShape` is still written once, for the right edge, and
       transformed onto the others. Four hand-written variants would mean four
       copies of the corner-versus-flare clamping, and three of them would never
@@ -1609,8 +1616,9 @@ behind it to sample is not what glass looks like on screen. The one glass
 exception is the hardware's band, below, which is painted the same opaque
 black regardless of style and so needs no desktop to read correctly. The other
 thing the glass style still has to prove headlessly is that the folded pill
-stays opaque black whatever the surface style is; `testTheFoldedPillIsOpaqueInTheGlassStyle`
-pins that rest state.
+paints nothing of its own in the glass style — commit ac1469d made glass
+reach the folded notch — which `testTheFoldedPillIsTransparentInTheGlassStyle`
+pins.
 
 ### The hardware's band stays black
 
@@ -1629,10 +1637,27 @@ Upstream 1.7.0 draws the whole notch two points past the bezel
 strip of glass inside the hole. The band is now `contentInset + bezelBleed /
 sizeScale` deep, which after scaling and the unscaled offset covers exactly
 `contentInset × sizeScale` on screen — the same region the readings are kept
-out of. It only showed in the full run: rendered alone, `ImageRenderer` draws
-glass transparent and the probe skips it; after earlier tests have exercised
-the effect it draws a light material, and
-`testTheHardwaresBandStaysBlackInTheGlassStyle` caught the strip.
+out of. It only showed in the full run, and the reason turned out not to be
+layer order: bisected with `-only-testing` pairs, `ImageRenderer` paints
+`glassEffect` as nothing in a cold process; once any test has shown a live
+`NotchPanel` — in any surface style, painting glass or not — the same
+renderer paints `glassEffect` as an opaque flat grey (136/255, alpha 1) over
+its ZStack siblings for the rest of the process, so the band probe read grey
+although the layer order was right all along. Earlier offscreen renders do not
+trigger it, and `stop()` does not undo it. The fix is the
+`\.codenotchHeadlessGlass` environment flag: it lets the two glass pixel tests
+render the glass path with the system material left out, so they check only
+what is ours — the transparent body fill, the `darkGlass` dim and the opaque
+band — since the material itself is the system's and is not testable headless.
+
+Within one test process, the first `ImageRenderer` render of a given pixel
+size in a test method can hand back the *previous* test method's image at
+that size: the folded-pill test first read `testReduceTransparencyPaintsTheGlassStyleSolid`'s
+opaque black at four cells, the panel size both tests shared. Warm-up
+renders, fresh models and `.id(UUID())` did not clear it; a panel size no
+other pixel test renders (`cells: 3`) did. The next pixel test should give
+itself a size of its own, or expect the first render of a size it shares
+with another test to be stale.
 
 ### Below macOS 26, and with Reduce transparency on
 
@@ -1648,6 +1673,58 @@ learns about a live accessibility change from
 `NSWorkspace.accessibilityDisplayOptionsDidChangeNotification` and re-applies
 the panel's appearance from that subscription, rather than only checking once
 at launch.
+
+### Dark glass
+
+`NotchSurfaceStyle.darkGlass` pins `darkAqua` on the panel for the same reason
+`solid` does: so `Palette`'s frame hexes apply exactly as specified rather
+than following the Mac into light mode. It is also the one deliberate
+exception to "nothing underneath" above — the user asked for black glass
+regardless of the Mac's own Appearance setting, so every glass site the notch
+draws (the body, the tooltip, the usage-reset card, the settings orb and the
+move handle) uses `Glass.clear` with `Palette.darkGlassDim` (black at 0.60)
+drawn in a `.background` beneath it when the style is `.darkGlass`. `glass`
+keeps using plain `Glass.regular` with nothing beneath it at every one of
+those sites, so it stays byte-for-byte the system's own glass. 0.60 replaced
+an initial 0.45, which read too light through `Glass.clear` on a real Mac
+(macOS 27) against a light desktop.
+
+The first attempt tried a black `Glass.tint(_:)` on `.regular` instead, and it
+rendered lighter and whiter than plain regular glass rather than darker.
+`Glass.regular` is adaptive — it adjusts its content to the luminosity of
+whatever is behind it — and `tint` only colourises the material toward a hue;
+a zero-chroma black tint has no hue to push toward and cannot lower
+luminance. The SDK's own `Glass.clear` doc comment gives the actual recipe for
+a dark glass: `.glassEffect(.clear)` over "a transparent black color beneath
+your glass", which is what `darkGlass` now does. The hardware's band is
+unaffected either way: it is painted opaque black regardless of surface
+style, as above.
+
+The dim is the one part of the style a headless render can see, so
+`testTheFoldedPillCarriesTheDimInTheDarkGlassStyle` probes it — at `cells: 5`,
+a panel size of its own, because the hand-me-down above would otherwise hand
+this test's dim to the folded-pill test that sorts right before it.
+
+## The local model's ring
+
+### A small context is an arc, not a dot
+
+A local-runtime cell (LM Studio, Ollama) draws its outer arc as the last
+request's prompt tokens over the loaded instance's context length, in the
+colour of the last response's speed band. When the last prompt filled only a
+few percent of the context, the trimmed arc was shorter than its own round
+caps and rendered as a single dot, which read as a status light ("green =
+fine") rather than a context reading.
+
+The fix is `NotchLayout.localArcMinimumSweep` (0.06 of the circle, ≈20px of
+body at the ring's radius plus the caps, so it is unmistakably an arc, and
+below 0.1 so the floor cannot be mistaken for a real reading);
+`ProviderRing.localSweep(for:)` applies it only when a reading exists, `nil`
+still draws the full ring as Ollama always did. The floor is a drawing
+decision only — `ringFraction`, the tooltip's "Context used" and the
+VoiceOver text keep the true number. Pinned by
+`testASmallContextStillReadsAsAnArc` and `testTheMinimumArcIsLongerThanItsCaps`
+in `NotchLayoutTests`.
 
 ## Decisions needed
 - [ ] Final app name (`Codenotch` is a placeholder)

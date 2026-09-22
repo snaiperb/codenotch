@@ -119,6 +119,25 @@ enum GLMCredentials {
         return nil
     }
 
+    /// Whether ZCode has Z.ai's Start Plan switched on (#71).
+    ///
+    /// Its key is not claimed as a credential: the monitor endpoint the Coding
+    /// Plan is read from answers a Start Plan key with `code: 401` inside an
+    /// HTTP 200, and no usage route for the Start Plan is published. Knowing
+    /// it is there is still worth something — the row can say that, rather
+    /// than asking someone who is signed in to set up a key.
+    static func zcodeHasStartPlan(_ url: URL = zcodeConfigURL) -> Bool {
+        guard let root = dictionary(at: url), let providers = root["provider"] as? [String: Any]
+        else { return false }
+        return providers.contains { id, value in
+            guard id.contains("start-plan"), let provider = value as? [String: Any],
+                  let options = provider["options"] as? [String: Any],
+                  string(options["apiKey"]) != nil
+            else { return false }
+            return provider["enabled"] as? Bool ?? true
+        }
+    }
+
     static func zcode(_ url: URL) -> Credential? {
         guard let root = dictionary(at: url),
               let token = string(root["oauth:zai:access_token"])

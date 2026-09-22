@@ -297,6 +297,28 @@ final class GLMCredentialsTests: XCTestCase {
         XCTAssertNil(credential)
     }
 
+    /// #71: a Start Plan key is not a Coding Plan key — the monitor rejects it
+    /// — so it is never claimed as a credential, but it is noticed, so the row
+    /// can say the plan has no published usage instead of asking for a key.
+    func testAStartPlanIsNoticedButNeverClaimed() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("zcode-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try """
+        { "provider": { "builtin:zai-start-plan": {
+            "enabled": true,
+            "options": { "apiKey": "start-key",
+                         "baseURL": "https://zcode.z.ai/api/v1/zcode-plan/anthropic" } } } }
+        """.write(to: url, atomically: true, encoding: .utf8)
+        XCTAssertNil(GLMCredentials.zcodePlanKey(url))
+        XCTAssertTrue(GLMCredentials.zcodeHasStartPlan(url))
+
+        try """
+        { "provider": { "builtin:zai-start-plan": {
+            "enabled": false, "options": { "apiKey": "start-key" } } } }
+        """.write(to: url, atomically: true, encoding: .utf8)
+        XCTAssertFalse(GLMCredentials.zcodeHasStartPlan(url), "a Start Plan switched off is not in use")
+    }
+
     /// A plain API provider is pay-as-you-go, not the plan — the monitor
     /// reports plan quota, so an entry without `coding-plan` in its name is
     /// none of ours.

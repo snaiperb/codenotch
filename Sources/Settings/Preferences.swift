@@ -56,6 +56,15 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(lmstudioEndpoint, forKey: Keys.lmstudioEndpoint) }
     }
 
+    /// User-configured custom OpenAI-compatible endpoints.
+    @Published var customEndpoints: [CustomEndpoint] {
+        didSet {
+            if let data = try? JSONEncoder().encode(customEndpoints) {
+                defaults.set(data, forKey: Keys.customEndpoints)
+            }
+        }
+    }
+
     /// Providers whose threshold alerts are muted. Stored as the muted set so
     /// a provider added later alerts by default. Connection is stored the
     /// other way: the ones that are on.
@@ -225,6 +234,10 @@ final class Preferences: ObservableObject {
     }
 
     /// Whether the weekly limit gets a ring of its own, and where it sits.
+    @Published var weeklyRingDashed: Bool {
+        didSet { defaults.set(weeklyRingDashed, forKey: Keys.weeklyRingDashed) }
+    }
+
     @Published var weeklyRing: WeeklyRing {
         didSet { defaults.set(weeklyRing.rawValue, forKey: Keys.weeklyRing) }
     }
@@ -244,6 +257,22 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(notchSurfaceStyle.rawValue, forKey: Keys.notchSurfaceStyle) }
     }
 
+    @Published var watchLimit: Double {
+        didSet {
+            let clamped = min(max(watchLimit, 0.01), criticalLimit - 0.01)
+            if clamped != watchLimit { watchLimit = clamped; return }
+            defaults.set(watchLimit, forKey: Keys.watchLimit)
+        }
+    }
+
+    @Published var criticalLimit: Double {
+        didSet {
+            let clamped = min(max(criticalLimit, watchLimit + 0.01), 1.0)
+            if clamped != criticalLimit { criticalLimit = clamped; return }
+            defaults.set(criticalLimit, forKey: Keys.criticalLimit)
+        }
+    }
+
     /// The language the app itself speaks.
     ///
     /// `.system` follows the Mac. Written through `L10n.apply` so the store
@@ -255,6 +284,46 @@ final class Preferences: ObservableObject {
     /// Where the app itself shows up: Dock, menu bar, or nowhere.
     @Published var appPresence: AppPresence {
         didSet { defaults.set(appPresence.rawValue, forKey: Keys.presence) }
+    }
+
+    /// Whether the menu bar item shows five-hour limits instead of its icon.
+    ///
+    /// Off unless switched on. The item is the way into an app that has left
+    /// the Dock, and an update that swapped it for a readout several times as
+    /// wide — pushing everything beside it along, and on a notched MacBook
+    /// perhaps off the bar altogether — would be a change nobody asked for.
+    @Published var showsLimitsInMenuBar: Bool {
+        didSet { defaults.set(showsLimitsInMenuBar, forKey: Keys.showsLimitsInMenuBar) }
+    }
+
+    /// Whether providers with a weekly allowance add its compact ring to the
+    /// existing limit readout. Off by default so upgrades keep the exact menu
+    /// bar width and appearance they had before this setting existed.
+    @Published var showsWeeklyLimitInMenuBar: Bool {
+        didSet { defaults.set(showsWeeklyLimitInMenuBar, forKey: Keys.showsWeeklyLimitInMenuBar) }
+    }
+
+    /// The providers the menu bar summarises when it does, as ids. Nil until
+    /// the first choice — see `MenuBarLimits` for what that reads as. From
+    /// then on it is the ones that are on, so a provider that turns up later
+    /// stays out of the bar until someone puts it there.
+    ///
+    /// Never written alongside `connectedProviders`: one is what the menu bar
+    /// shows, the other what Codenotch reads, and `MenuBarLimits` says why the
+    /// two stay apart.
+    @Published private(set) var menuBarProviders: Set<String>? {
+        didSet {
+            if let menuBarProviders {
+                defaults.set(menuBarProviders.sorted(), forKey: Keys.menuBarProviders)
+            } else {
+                defaults.removeObject(forKey: Keys.menuBarProviders)
+            }
+        }
+    }
+
+    /// Both halves of the menu bar choice, the way the status item takes them.
+    var menuBarLimits: MenuBarLimits {
+        MenuBarLimits(isOn: showsLimitsInMenuBar, chosen: menuBarProviders)
     }
 
     /// Open the notch for a few seconds when an agent stops working.
@@ -397,6 +466,9 @@ final class Preferences: ObservableObject {
         static let visibility = "notchVisibility"
         static let foldsForFullScreen = "foldsForFullScreen"
         static let presence = "appPresence"
+        static let showsLimitsInMenuBar = "showsLimitsInMenuBar"
+        static let showsWeeklyLimitInMenuBar = "showsWeeklyLimitInMenuBar"
+        static let menuBarProviders = "menuBarProviders"
         static let edge = "notchEdge"
         // A new key, so there is nothing under the old app name to migrate.
         static let size = "notchSize"
@@ -408,9 +480,13 @@ final class Preferences: ObservableObject {
         static let accentColor = "accentColor"
         // A new key, so there is nothing under the old app name to migrate.
         static let weeklyRing = "weeklyRing"
+        static let weeklyRingDashed = "weeklyRingDashed"
         static let claudeDailyPaceRing = "claudeDailyPaceRing"
         static let showsMoveHandle = "showsMoveHandle"
         static let notchSurfaceStyle = "notchSurfaceStyle"
+        static let watchLimit = "watchLimit"
+        static let criticalLimit = "criticalLimit"
+        static let customEndpoints = "customEndpoints"
         static let lastSeenVersion = "lastSeenVersion"
         static let order = "providerOrder"
         static let announceSessionEnd = "announceSessionEnd"
@@ -479,6 +555,50 @@ final class Preferences: ObservableObject {
         defaults: UserDefaults = .standard
     ) -> Bool {
         defaults.object(forKey: Keys.showCodexExtraLimits) as? Bool ?? true
+    }
+
+    /// The MiniMax region read straight from disk, off the main actor.
+    ///
+    /// Custom endpoints read straight from disk, off the main actor.
+    ///
+    /// Moves any key an earlier build left in the defaults plist into the keychain,
+    /// once, and writes the list back without it.
+    ///
+    /// The rewrite is the point. `customEndpoints` is assigned during `init`, where
+    /// `didSet` does not run, so without this the plaintext key stayed in the plist —
+    /// readable by any process running as the user, and swept into backups — until
+    /// the user happened to edit that endpoint. Returns the list with the carried
+    /// keys cleared, so a later encode cannot put them back.
+    nonisolated static func movingLegacyKeysToKeychain(
+        _ list: [CustomEndpoint],
+        defaults: UserDefaults
+    ) -> [CustomEndpoint] {
+        guard list.contains(where: { $0.legacyAPIKey != nil }) else { return list }
+        var migrated = list
+        for index in migrated.indices {
+            guard let legacy = migrated[index].legacyAPIKey else { continue }
+            // Only if the keychain has nothing: a key already moved is the newer one.
+            if migrated[index].apiKey == nil {
+                migrated[index].saveAPIKey(legacy)
+            }
+            migrated[index].legacyAPIKey = nil
+        }
+        if let data = try? JSONEncoder().encode(migrated) {
+            defaults.set(data, forKey: Keys.customEndpoints)
+        }
+        return migrated
+    }
+
+    /// Custom endpoint providers are actors and ask for this on every fetch, and
+    /// `@Published` state is main-actor-isolated where `UserDefaults` is
+    /// thread-safe — so providers read the store, not the object.
+    nonisolated static func storedCustomEndpoints(
+        defaults: UserDefaults = .standard
+    ) -> [CustomEndpoint] {
+        guard let data = defaults.data(forKey: Keys.customEndpoints),
+              let endpoints = try? JSONDecoder().decode([CustomEndpoint].self, from: data)
+        else { return [] }
+        return endpoints
     }
 
     /// The MiniMax region read straight from disk, off the main actor.
@@ -623,6 +743,14 @@ final class Preferences: ObservableObject {
         // to learn it is running.
         self.appPresence = defaults.string(forKey: Keys.presence)
             .flatMap(AppPresence.init(rawValue:)) ?? .dock
+        // Absent means never chosen, which is the icon every earlier version
+        // drew — see `showsLimitsInMenuBar`.
+        self.showsLimitsInMenuBar = defaults.bool(forKey: Keys.showsLimitsInMenuBar)
+        // Absent means an install from before this option, which must retain
+        // its existing compact status-item presentation.
+        self.showsWeeklyLimitInMenuBar = defaults.bool(forKey: Keys.showsWeeklyLimitInMenuBar)
+        // Absent is kept distinct from empty: never chosen is not choosing none.
+        self.menuBarProviders = defaults.stringArray(forKey: Keys.menuBarProviders).map(Set.init)
         // The right edge is where the notch has always been, and it is the one
         // side of a Mac that no system chrome claims by default.
         self.notchEdge = defaults.string(forKey: Keys.edge)
@@ -666,6 +794,8 @@ final class Preferences: ObservableObject {
         // Follow the Mac unless the user explicitly chooses a Codenotch colour.
         // Off by default: an extra arc in a 44pt circle is a change to how
         // every reading looks, and nobody asked for it on their behalf.
+        self.weeklyRingDashed = defaults.object(forKey: Keys.weeklyRingDashed) as? Bool ?? false
+
         self.weeklyRing = defaults.string(forKey: Keys.weeklyRing)
             .flatMap(WeeklyRing.init(rawValue:)) ?? .off
         // On unless turned off: it is how the notch is carried to another edge,
@@ -675,6 +805,13 @@ final class Preferences: ObservableObject {
             .flatMap(AccentColorChoice.init(rawValue:)) ?? .system
         self.notchSurfaceStyle = defaults.string(forKey: Keys.notchSurfaceStyle)
             .flatMap(NotchSurfaceStyle.init(rawValue:)) ?? .glass
+        let storedWatchLimit = defaults.object(forKey: Keys.watchLimit) as? Double ?? 0.50
+        let storedCriticalLimit = defaults.object(forKey: Keys.criticalLimit) as? Double ?? 0.70
+        // `didSet` does the clamping, and it does not run for these assignments,
+        // so a stored pair that crossed over is repaired here instead.
+        let critical = min(max(storedCriticalLimit, 0.02), 1.0)
+        self.criticalLimit = critical
+        self.watchLimit = min(max(storedWatchLimit, 0.01), critical - 0.01)
         // Absent means never chosen, which is follow-the-Mac.
         self.language = defaults.string(forKey: L10n.languageDefaultsKey)
             .flatMap(AppLanguage.init(rawValue:)) ?? .system
@@ -705,9 +842,41 @@ final class Preferences: ObservableObject {
             ?? SessionChime.defaultBlocked
         self.geminiAPIMonthlyTokenBudget = Self.storedGeminiAPIMonthlyTokenBudget(defaults: defaults)
         self.minimaxRegion = Self.storedMinimaxRegion(defaults: defaults)
+        if let data = defaults.data(forKey: Keys.customEndpoints),
+           let list = try? JSONDecoder().decode([CustomEndpoint].self, from: data) {
+            self.customEndpoints = Self.movingLegacyKeysToKeychain(list, defaults: defaults)
+        } else {
+            self.customEndpoints = []
+        }
         // Read from the system rather than from our own store: the user can turn
         // this off in System Settings, and a remembered `true` would then be a lie.
         self.launchAtLogin = Self.isRegisteredForLogin
+    }
+
+    // MARK: Custom Endpoints
+
+    func addCustomEndpoint(_ endpoint: CustomEndpoint) {
+        customEndpoints.append(endpoint)
+        if endpoint.isEnabled {
+            setConnected(true, for: endpoint.providerID)
+        }
+    }
+
+    func updateCustomEndpoint(_ endpoint: CustomEndpoint) {
+        if let idx = customEndpoints.firstIndex(where: { $0.id == endpoint.id }) {
+            customEndpoints[idx] = endpoint
+            setConnected(endpoint.isEnabled, for: endpoint.providerID)
+        }
+    }
+
+    func removeCustomEndpoint(id: String) {
+        if let endpoint = customEndpoints.first(where: { $0.id == id }) {
+            setConnected(false, for: endpoint.providerID)
+            if let filename = endpoint.customIconFilename {
+                CustomIconStore.deleteIcon(filename: filename)
+            }
+        }
+        customEndpoints.removeAll { $0.id == id }
     }
 
     // MARK: Threshold alerts
@@ -724,9 +893,23 @@ final class Preferences: ObservableObject {
         }
     }
 
+    // MARK: Menu bar
+
+    /// Whether this provider is chosen for the menu bar. Says nothing about
+    /// whether it is read — that is `isConnected`.
+    func isInMenuBar(_ providerID: String) -> Bool {
+        menuBarLimits.isChosen(providerID)
+    }
+
+    /// Put one provider in the menu bar or take it out. `listed` is every
+    /// provider Settings is showing, which the first choice writes down.
+    func setInMenuBar(_ shown: Bool, for providerID: String, among listed: [String]) {
+        menuBarProviders = menuBarLimits.choosing(shown, providerID, among: listed).chosen
+    }
+
     /// Claude and Codex stay on for a first install and for a newly discovered
     /// profile. Everyone else starts off.
-    static func isDefaultOnFamily(_ providerID: String) -> Bool {
+    nonisolated static func isDefaultOnFamily(_ providerID: String) -> Bool {
         ClaudeProfile.isClaude(providerID: providerID)
             || CodexProfile.isCodex(providerID: providerID)
     }

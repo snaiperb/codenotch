@@ -67,7 +67,9 @@ struct GrokCredentials {
     }
 
     static func isTrusted(key: String, entry: [String: Any]) -> Bool {
-        if key.hasPrefix(trustedIssuer) { return true }
+        // The issuer is the part before `::`, compared whole. A prefix match
+        // also let `https://auth.x.ai.example.com::id` through.
+        if key.components(separatedBy: "::").first == trustedIssuer { return true }
         if let issuer = entry["oidc_issuer"] as? String, issuer == trustedIssuer { return true }
         return false
     }

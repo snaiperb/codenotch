@@ -99,8 +99,6 @@ final class NotchViewModel: ObservableObject {
     /// toggles a pin; only Settings moves this.
     @Published var isAlwaysOn = false
 
-    /// Held open, by either route. What the folding logic actually asks.
-    var staysOpen: Bool { isPinned || isAlwaysOn }
     /// Providers with a fetch in flight, driven by the store.
     @Published var refreshing: Set<String> = []
     /// Bumped each time the settings orb is clicked, by either route.
@@ -185,6 +183,9 @@ final class NotchViewModel: ObservableObject {
     /// Mirrored here for the same reason `accentColor` is: the notch is a
     /// separate window, and it has to redraw the moment Settings changes this.
     @Published var weeklyRing: WeeklyRing = .off
+    @Published var weeklyRingDashed: Bool = false
+    @Published var watchLimit: Double = 0.50
+    @Published var criticalLimit: Double = 0.70
     /// Whether the move handle is on the notch at all. Mirrored from Settings
     /// like `weeklyRing`.
     @Published var showsMoveHandle = true
@@ -337,7 +338,7 @@ final class NotchViewModel: ObservableObject {
     /// Reserve the full hit area even while only the resting arc is visible,
     /// so revealing the settings button cannot put it beyond the screen.
     var trailingExtent: CGFloat {
-        max(0, orbAlong - shapeLength + NotchLayout.orbHotZone / 2).rounded(.up)
+        (max(0, orbAlong - shapeLength + NotchLayout.orbHotZone / 2) * sizeScale).rounded(.up)
     }
 
     /// Where the move handle sits: the settings orb's position mirrored to the
@@ -350,8 +351,15 @@ final class NotchViewModel: ObservableObject {
 
     /// The mirror of `trailingExtent` at the near end — the room the move
     /// handle needs before the notch's own start.
+    ///
+    /// Nothing when the handle is switched off, unlike `trailingExtent`: the
+    /// settings orb is always there to be revealed, but a hidden handle is
+    /// hidden for the session. Reserving its room anyway kept the notch from
+    /// sliding to the leading end of its edge, which is a place ⌥-drag is
+    /// meant to reach.
     var leadingExtent: CGFloat {
-        max(0, -moveAlong + NotchLayout.orbHotZone / 2).rounded(.up)
+        guard showsMoveHandle else { return 0 }
+        return (max(0, -moveAlong + NotchLayout.orbHotZone / 2) * sizeScale).rounded(.up)
     }
 
     /// Where the bar's far corner actually turns, along the stack.
@@ -561,7 +569,7 @@ final class NotchViewModel: ObservableObject {
     }
 
     private var hasResetCredits: Bool {
-        snapshots.contains { $0.resetCredits != nil }
+        snapshots.contains(where: \.hasAvailableResetCredits)
     }
 
     func sessionCap(cellCount: Int) -> Int {
@@ -585,7 +593,7 @@ final class NotchViewModel: ObservableObject {
                 blockMessage: snapshot.block?.summary(now: now),
                 hasTokenUsage: snapshot.tokenUsage != nil,
                 hasPlan: snapshot.plan != nil,
-                hasResetCredits: snapshot.resetCredits != nil,
+                hasResetCredits: snapshot.hasAvailableResetCredits,
                 localModelName: snapshot.localModel?.name,
                 showsLocalPerformance: snapshot.showsLocalPerformance,
                 localLedgerRows: snapshot.localLedgerRowCount,

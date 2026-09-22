@@ -500,6 +500,11 @@ final class HardwareClearanceTests: XCTestCase {
     /// The glass surface paints the band with a layer of its own, so it can go
     /// wrong on its own: without it the cutout reads as a black rectangle set
     /// into a sheet of glass.
+    ///
+    /// What this proves is that the band is opaque black *on the glass path* —
+    /// the glass path is rendered with the system material left out, because
+    /// offscreen it draws either nothing or an opaque grey over its siblings.
+    /// The band is ours; the material is the system's and is not testable here.
     func testTheHardwaresBandStaysBlackInTheGlassStyle() {
         assertTheBandHoldsNothingButBlack(model(style: .glass))
     }
@@ -511,6 +516,10 @@ final class HardwareClearanceTests: XCTestCase {
         let renderer = ImageRenderer(
             content: NotchRootView(model: m).frame(width: m.panelSize.width,
                                                    height: m.panelSize.height)
+                // The system material is not renderable offscreen; the band
+                // over it is ours. See TASKS.md, "The hardware's band stays
+                // black".
+                .environment(\.codenotchHeadlessGlass, true)
         )
         renderer.scale = 1
         guard let image = renderer.cgImage, let rep = NSBitmapImageRep(cgImage: image).cgImage

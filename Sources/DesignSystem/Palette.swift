@@ -35,8 +35,33 @@ enum Palette {
     static let generationFast = Color(hex: 0x0A84FF)          // blue
     static let generationSlow = Color(hex: 0xFF453A)          // red
 
+    /// The one wash of our own laid *under* the system's glass, and only for
+    /// `NotchSurfaceStyle.darkGlass`: that style exists because a black notch
+    /// was asked for regardless of the Mac's Appearance, which the untinted
+    /// `glass` cannot promise. It is a background beneath `Glass.clear`, not a
+    /// `Glass.tint` — tinting only colourises an adaptive material and made the
+    /// surface lighter, so the darkening has to happen behind the glass. 0.45
+    /// was the first value tried and read too light through `Glass.clear` on a
+    /// real Mac (macOS 27) against a light desktop; 0.60 is what the user
+    /// chose by eye instead — opaque enough to be the bezel, thin enough not
+    /// to be `solid`.
+    static let darkGlassDim = Color.black.opacity(0.60)
+
+    /// Tooltip copy retains the frame's #808080 secondary ink in Dark glass.
+    /// It needs a deeper local backing than the notch itself when a light
+    /// desktop is visible through `Glass.clear`, otherwise the two greys merge.
+    static let darkGlassTooltipDim = Color.black.opacity(0.80)
+
+    /// A tooltip-only wash for standard Liquid Glass in dark appearance. It is
+    /// intentionally weaker than `darkGlassDim`: regular glass stays visibly
+    /// distinct from the user-selected always-dark surface.
+    static let liquidGlassTooltipDim = Color.black.opacity(0.35)
+
     static let textPrimary   = Color(dark: .white, light: .black)
     static let textSecondary = Color(dark: NSColor(hex: 0x808080), light: NSColor(hex: 0x6B6B6B))
+    /// Used only by dark, standard Liquid Glass tooltips. Other surfaces keep
+    /// `textSecondary`, including their frame-accurate #808080 dark ink.
+    static let readableTooltipTextSecondary = Color(dark: NSColor(hex: 0xC2C2C2), light: NSColor(hex: 0x6B6B6B))
 }
 
 extension Color {
@@ -84,3 +109,37 @@ extension EnvironmentValues {
     }
 }
 
+private struct CodenotchHeadlessGlassKey: EnvironmentKey {
+    static let defaultValue: Bool = false
+}
+
+private struct TooltipSecondaryInkKey: EnvironmentKey {
+    static let defaultValue = Palette.textSecondary
+}
+
+extension EnvironmentValues {
+    /// Secondary ink resolved for the current tooltip surface. This stays
+    /// frame-accurate unless ordinary dark Liquid Glass needs extra contrast.
+    var tooltipSecondaryInk: Color {
+        get { self[TooltipSecondaryInkKey.self] }
+        set { self[TooltipSecondaryInkKey.self] = newValue }
+    }
+}
+
+extension EnvironmentValues {
+    /// Draw the glass path with the system material left out. Tests only; the
+    /// app never sets it.
+    ///
+    /// `ImageRenderer` cannot draw the material faithfully: in a cold process
+    /// it paints `glassEffect` as nothing at all, and once any test has shown
+    /// a live `NotchPanel` it paints it as an opaque flat grey over its ZStack
+    /// siblings for the rest of the process. Either way the pixels say nothing
+    /// about the product. So the glass pixel tests render everything *around*
+    /// the material — the transparent body fill, the `darkGlass` dim, the
+    /// opaque hardware band — which is the part that is ours to get wrong.
+    /// See TASKS.md, "The hardware's band stays black".
+    var codenotchHeadlessGlass: Bool {
+        get { self[CodenotchHeadlessGlassKey.self] }
+        set { self[CodenotchHeadlessGlassKey.self] = newValue }
+    }
+}

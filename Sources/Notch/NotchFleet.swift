@@ -25,6 +25,7 @@ final class NotchFleet {
     private(set) var scope: NotchScreenScope
     private var edge: NotchEdge
     private var visibility: NotchVisibility = .onHover
+
     private var snapshots: [ProviderSnapshot] = []
     private(set) var thinkingModels: [String: Date] = [:]
     /// Per source, the way the view model keeps them: the Ollama relay and
@@ -51,9 +52,12 @@ final class NotchFleet {
     private var displayPreference: DisplayPreference = .followActiveWindow
     private var resetTimeFormat: ResetTimeFormat = .automatic
     private var accentColor: AccentColorChoice = .system
+    private var watchLimit: Double = 0.50
+    private var criticalLimit: Double = 0.70
     /// One choice for the whole fleet, like the edge and the size: a weekly
     /// ring on one display and not another would read as a bug.
     private var weeklyRing: WeeklyRing = .off
+    private var weeklyRingDashed: Bool = false
     private var showsMoveHandle = true
     private var foldsForFullScreen = true
     private var surfaceStyle: NotchSurfaceStyle = .glass
@@ -69,7 +73,6 @@ final class NotchFleet {
 
     /// Hooked up by the app delegate; driven by the notch's own chrome.
     var onRefresh: (() -> Void)?
-    var onToggleKeepOpen: (() -> Void)?
     var onRefreshProvider: ((String) async -> Void)?
     var onOpenSettings: (() -> Void)?
     var onFocusSession: ((pid_t) -> Void)?
@@ -176,10 +179,26 @@ final class NotchFleet {
         }
     }
 
+    func apply(weeklyRingDashed: Bool) {
+        self.weeklyRingDashed = weeklyRingDashed
+        for controller in controllers.values {
+            controller.model.weeklyRingDashed = weeklyRingDashed
+        }
+    }
+
     func apply(weeklyRing: WeeklyRing) {
         self.weeklyRing = weeklyRing
         for controller in controllers.values {
             controller.model.weeklyRing = weeklyRing
+        }
+    }
+
+    func apply(watchLimit: Double, criticalLimit: Double) {
+        self.watchLimit = watchLimit
+        self.criticalLimit = criticalLimit
+        for controller in controllers.values {
+            controller.model.watchLimit = watchLimit
+            controller.model.criticalLimit = criticalLimit
         }
     }
 
@@ -400,11 +419,15 @@ final class NotchFleet {
         controller.model.sizeScale = scale
         controller.model.resetTimeFormat = resetTimeFormat
         controller.model.accentColor = accentColor
+        controller.model.watchLimit = watchLimit
+        controller.model.criticalLimit = criticalLimit
         controller.model.weeklyRing = weeklyRing
+        controller.model.weeklyRingDashed = weeklyRingDashed
         controller.model.showsMoveHandle = showsMoveHandle
         controller.model.surfaceStyle = surfaceStyle
         controller.model.deepSeekPricingEnabled = deepSeekPricingEnabled
         controller.model.deepSeekPricingSchedule = deepSeekPricingSchedule
+
         controller.onRefresh = onRefresh
         controller.onRefreshProvider = onRefreshProvider
         controller.onOpenSettings = onOpenSettings
@@ -412,7 +435,6 @@ final class NotchFleet {
         controller.model.onFocusSession = onFocusSession
         controller.onReposition = onReposition
         controller.onMoveToEdge = onMoveToEdge
-        controller.onToggleKeepOpen = onToggleKeepOpen
         controller.signInItems = signInItems
         controller.model.updateSnapshots(snapshots)
         controller.model.thinkingModels = thinkingModels

@@ -57,14 +57,49 @@ enum L10n {
         return .current
     }
 
+    /// One bundle per language, resolved once.
+    ///
+    /// `t` is called from view bodies that the notch's 0.3s cursor poll
+    /// repaints, so its cost is paid a few hundred times a second.
+    private static let bundlesLock = NSLock()
+    private static var bundles: [String: Bundle] = [:]
+
+    /// The `.lproj` holding `locale`'s copy, or nil when the catalog has none.
+    private static func bundle(for locale: Locale) -> Bundle? {
+        bundlesLock.lock()
+        defer { bundlesLock.unlock() }
+        if let hit = bundles[locale.identifier] { return hit }
+        // Matches the way the identifier is spelled to the way the catalog
+        // spells it: en_US to en, pt_BR to pt-BR.
+        guard let name = Bundle.preferredLocalizations(
+                  from: bundle.localizations, forPreferences: [locale.identifier]
+              ).first,
+              let url = bundle.url(forResource: name, withExtension: "lproj"),
+              let resolved = Bundle(url: url)
+        else { return nil }
+        bundles[locale.identifier] = resolved
+        return resolved
+    }
+
     static func t(_ key: String.LocalizationValue, locale: Locale = locale) -> String {
         // `String(localized:locale:)` only formats interpolated numbers; it
-        // still looks the string up in the bundle's preferred language. The
-        // resource carries the locale into the lookup, which is what the
-        // XCTest pin needs on a Chinese Mac.
-        String(localized: LocalizedStringResource(
-            key, locale: locale, bundle: .atURL(bundle.bundleURL)
-        ))
+        // still looks the string up in the bundle's preferred language. So the
+        // locale has to be carried in by *which bundle* is asked — a bundle
+        // holding that language alone — which is what the XCTest pin needs on
+        // a Chinese Mac.
+        //
+        // Not `LocalizedStringResource(bundle: .atURL(…))`, which does carry a
+        // locale but re-resolves the bundle on every lookup and so misses
+        // CFBundle's string-table cache: each call re-read and re-parsed the
+        // whole 128KB `Localizable.strings`. That measured 0.78ms a call
+        // against 0.001ms here, and left 57% of the main thread inside
+        // `_CFBundleCopyLocalizedStringForLocalizations` on an idle app.
+        guard let languageBundle = bundle(for: locale) else {
+            return String(localized: LocalizedStringResource(
+                key, locale: locale, bundle: .atURL(bundle.bundleURL)
+            ))
+        }
+        return String(localized: key, bundle: languageBundle, locale: locale)
     }
 
     static func apply(_ language: AppLanguage) {

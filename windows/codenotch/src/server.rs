@@ -18,6 +18,14 @@ pub fn start(app: AppHandle, port: u16) {
         for mut req in server.incoming_requests() {
             let url = req.url().to_string();
             if url.starts_with("/event") {
+                // codenotch-hook only ever POSTs. A GET is also what a web page can send with no
+                // Origin header at all (an image tag), so nothing but POST is taken (#165).
+                if *req.method() != tiny_http::Method::Post {
+                    let _ = req.respond(
+                        tiny_http::Response::from_string("method not allowed").with_status_code(405),
+                    );
+                    continue;
+                }
                 // Cross-Origin / CSRF protection:
                 // Reject untrusted browser requests attempting to forge events or poison local state.
                 if is_forbidden(&req) {
@@ -143,7 +151,7 @@ pub(crate) fn is_allowed_origin(origin: &str) -> bool {
     };
 
     // An origin cannot contain userinfo (@), path (/), backslash (\), query (?), or fragment (#).
-    if rest.contains(|c: char| matches!(c, '@' | '/' | '\\' | '?' | '#')) {
+    if rest.contains(['@', '/', '\\', '?', '#']) {
         return false;
     }
 
@@ -310,13 +318,11 @@ mod tests {
         let handle = std::thread::spawn(move || {
             for req in server.incoming_requests().take(4) {
                 let url = req.url().to_string();
-                if url.starts_with("/event") {
-                    if is_forbidden(&req) {
-                        let _ = req.respond(
-                            tiny_http::Response::from_string("forbidden").with_status_code(403),
-                        );
-                        continue;
-                    }
+                if url.starts_with("/event") && is_forbidden(&req) {
+                    let _ = req.respond(
+                        tiny_http::Response::from_string("forbidden").with_status_code(403),
+                    );
+                    continue;
                 }
                 let _ = req.respond(tiny_http::Response::from_string("ok"));
             }

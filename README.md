@@ -48,7 +48,16 @@ instead, see [Building](#building).
 
 ## Windows
 
+[![Download for Windows](docs/design/download-windows.svg)](../../releases/latest/download/Codenotch-Setup.exe)
+
 A Windows port — Rust/Tauri 2, same design and providers — lives in [`windows/`](windows/README.md).
+The button is the installer itself, named `Codenotch-Setup.exe` in every release for the same
+reason the dmg keeps one name. It installs for the current user without administrator rights,
+and fetches WebView2 if Windows does not already have it.
+
+The installer is not code-signed, so the first time it runs SmartScreen says *Windows protected
+your PC*. Choose **More info**, then **Run anyway**. Every Windows change also leaves an
+installer on its [Windows Package run](../../actions/workflows/windows-package.yml).
 
 ## Connect your phone
 
@@ -84,6 +93,7 @@ wire-level details.
 | **Antigravity** | official where licensed, otherwise a request count | Antigravity's local language server first, then Google's quota endpoint; a plain count when neither will answer for the account. |
 | **GLM** | official | Z.ai's Coding Plan monitor endpoint, with a key borrowed from whichever coding tool already holds one — Claude Code's `settings.json`, ZCode, or OpenCode. |
 | **MiniMax** | official where a Coding Plan key is used, derived from official Platform responses for the in-app sign-in | A Coding Plan key pasted in Settings, or explicit sign-in in Codenotch's own WKWebView. |
+| **QianwenAI** | derived from official console responses | Explicit sign-in in Codenotch's own WKWebView, then the console's own Token Plan gateway. Shows the personal plan's 7-day credits window. |
 | **Ollama (Local)** | local runtime | Automatically detected local models, RAM/VRAM, unload time and context. Optional response capture adds thinking and generation speed. |
 | **LM Studio** | local runtime | Loaded models from LM Studio's own listing, what each one is doing (prompt, generating, queue) from its SDK socket, and speed, context use and tokens per day from its server log. No relay needed. |
 | **Grok** | official | The Grok CLI session in `~/.grok/auth.json`, against the same credits billing endpoint `/usage` uses. |
@@ -97,8 +107,9 @@ Most providers borrow a credential or session from a tool already on your Mac.
 DeepSeek is the explicit browser-login exception: it never reads a browser's
 cookies or credentials, and only makes requests after you choose **Sign in to
 DeepSeek** from Codenotch. MiniMax is the same kind of exception — a key you
-paste in Settings, or an explicit WKWebView sign-in. It never opens a browser's
-cookie store.
+paste in Settings, or an explicit WKWebView sign-in. QianwenAI is a third: it
+publishes no usage API and has no key to paste, so that WKWebView session is the
+only way in. None of them opens a browser's cookie store.
 
 Ollama Cloud accepts an API key in Settings. Switching a provider off stops its
 usage polling and forgets its readings; borrowed accounts stay signed in to
@@ -259,7 +270,13 @@ Appearance also carries the ring's accent colour. The device accent is the
 default; fixed presets are available for pink, red, orange, yellow, green,
 teal, blue, indigo, purple and off-white.
 
-The app itself can show a Dock icon, a menu bar icon, or neither.
+The app itself can show a Dock icon, a menu bar item, or neither. The menu bar
+item is the Codenotch icon until you switch on **Show limit information in
+menu bar** under Settings → Appearance → App; then it shows the five-hour
+limits of the providers you choose there — the provider's mark, the share used
+and the time until it resets, like `72% · 2h 18m | 41% · 4h 05m`. Choosing
+what the bar shows never changes what Codenotch reads, and with nothing chosen
+the icon comes back. Its menu has the full readings either way.
 
 ## Updates
 

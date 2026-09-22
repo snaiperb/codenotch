@@ -1,5 +1,35 @@
 import SwiftUI
 
+/// The regular Liquid Glass material follows the desktop behind it. A dark
+/// system appearance is not a guarantee of a dark result: a light wallpaper
+/// can still make the card pale enough to erase secondary copy. Keep that
+/// adaptive material, but give reading surfaces a stable dark base in this
+/// one case.
+enum TooltipGlassContrast {
+    static func needsReadableDim(surfaceStyle: NotchSurfaceStyle,
+                                 colorScheme: ColorScheme,
+                                 reduceTransparency: Bool = false) -> Bool {
+        surfaceStyle.effective == .glass && colorScheme == .dark && !reduceTransparency
+    }
+
+    static func dim(surfaceStyle: NotchSurfaceStyle, colorScheme: ColorScheme,
+                    reduceTransparency: Bool = false) -> Color? {
+        if surfaceStyle.effective == .darkGlass {
+            return Palette.darkGlassTooltipDim
+        }
+        return needsReadableDim(surfaceStyle: surfaceStyle, colorScheme: colorScheme,
+                                reduceTransparency: reduceTransparency)
+            ? Palette.liquidGlassTooltipDim : nil
+    }
+
+    static func secondaryInk(surfaceStyle: NotchSurfaceStyle, colorScheme: ColorScheme,
+                             reduceTransparency: Bool = false) -> Color {
+        needsReadableDim(surfaceStyle: surfaceStyle, colorScheme: colorScheme,
+                         reduceTransparency: reduceTransparency)
+            ? Palette.readableTooltipTextSecondary : Palette.textSecondary
+    }
+}
+
 /// The speech-bubble tail, its point aimed at the hovered cell.
 ///
 /// Its shoulders leave the card tangent to the card's edge. That continuous
@@ -108,9 +138,16 @@ struct TooltipSilhouette: Shape {
             tailRect = CGRect(x: rect.midX - tail.width / 2, y: cardRect.maxY,
                               width: tail.width, height: tail.height)
         }
+        var clampedTailOffset = tailOffset
         switch direction {
-        case .leading, .trailing: tailRect.origin.y += tailOffset
-        case .up, .down:          tailRect.origin.x += tailOffset
+        case .leading, .trailing:
+            let maxOffset = max(0, (cardRect.height / 2) - NotchLayout.cardCorner - (tail.height / 2))
+            clampedTailOffset = min(max(tailOffset, -maxOffset), maxOffset)
+            tailRect.origin.y += clampedTailOffset
+        case .up, .down:
+            let maxOffset = max(0, (cardRect.width / 2) - NotchLayout.cardCorner - (tail.width / 2))
+            clampedTailOffset = min(max(tailOffset, -maxOffset), maxOffset)
+            tailRect.origin.x += clampedTailOffset
         }
 
         return RoundedRectangle(cornerRadius: NotchLayout.cardCorner, style: .circular)
@@ -135,14 +172,16 @@ private struct TooltipShell<Content: View>: View {
 
     @Environment(\.codenotchReduceTransparency) private var reduceTransparency
     @Environment(\.notchSurfaceStyle) private var surfaceStyle
+    @Environment(\.colorScheme) private var colorScheme
 
     /// Reduce transparency means "no see-through chrome", which for this card
     /// is the solid style — the same precedence the Settings window applies to
     /// its own translucent chrome.
-    private var glassy: Bool { surfaceStyle.effective == .glass && !reduceTransparency }
+    private var glassy: Bool { surfaceStyle.isGlass && !reduceTransparency }
 
     /// Clear on glass: anything of ours under it would override the Clear or
-    /// Tinted choice in Appearance settings.
+    /// Tinted choice in Appearance settings. `darkGlass` is the one deliberate
+    /// exception, and its dim is drawn behind the glass itself, not here.
     private var surfaceFill: Color { glassy ? .clear : Palette.card }
 
     private var card: some View {
@@ -176,6 +215,18 @@ private struct TooltipShell<Content: View>: View {
         }
     }
 
+    private var clampedTailOffset: CGFloat {
+        let size = TooltipTail.size(for: direction)
+        switch direction {
+        case .leading, .trailing:
+            let maxOffset = max(0, (height / 2) - NotchLayout.cardCorner - (size.height / 2))
+            return min(max(tailOffset, -maxOffset), maxOffset)
+        case .up, .down:
+            let maxOffset = max(0, (NotchLayout.cardWidth / 2) - NotchLayout.cardCorner - (size.width / 2))
+            return min(max(tailOffset, -maxOffset), maxOffset)
+        }
+    }
+
     private var tail: some View {
         let size = TooltipTail.size(for: direction)
         // The tail is deliberately outside the clip: it is part of the card's
@@ -183,8 +234,8 @@ private struct TooltipShell<Content: View>: View {
         return TooltipTail(direction: direction)
             .fill(surfaceFill)
             .frame(width: size.width, height: size.height)
-            .offset(x: direction == .up || direction == .down ? tailOffset : 0,
-                    y: direction == .leading || direction == .trailing ? tailOffset : 0)
+            .offset(x: direction == .up || direction == .down ? clampedTailOffset : 0,
+                    y: direction == .leading || direction == .trailing ? clampedTailOffset : 0)
     }
 
     var body: some View {
@@ -193,14 +244,21 @@ private struct TooltipShell<Content: View>: View {
             // re-solved as `height` animates, so one piece of glass covers both
             // pieces however tall the card is.
             .background {
-                // `effective` is only ever `.glass` where `glassEffect` exists;
+                // `isGlass` is only ever true where `glassEffect` exists;
                 // the availability check is what tells the compiler so. Below
                 // that, `surfaceFill` has already painted the card opaque.
                 if glassy {
                     if #available(macOS 26.0, *) {
                         Color.clear
-                            .glassEffect(.regular, in: TooltipSilhouette(direction: direction,
-                                                                         tailOffset: tailOffset))
+                            .glassEffect(surfaceStyle.glass, in: TooltipSilhouette(direction: direction,
+                                                                                   tailOffset: clampedTailOffset))
+                            .background {
+                                if let dim = TooltipGlassContrast.dim(surfaceStyle: surfaceStyle,
+                                                                      colorScheme: colorScheme,
+                                                                      reduceTransparency: reduceTransparency) {
+                                    TooltipSilhouette(direction: direction, tailOffset: clampedTailOffset).fill(dim)
+                                }
+                            }
                     }
                 }
             }
@@ -230,6 +288,7 @@ private struct TooltipHeader<Mark: View>: View {
     /// the card no extra height.
     var note: String?
     @ViewBuilder let mark: Mark
+    @Environment(\.tooltipSecondaryInk) private var secondaryInk
 
     var body: some View {
         HStack(alignment: .center, spacing: NotchLayout.headerGap) {
@@ -245,14 +304,14 @@ private struct TooltipHeader<Mark: View>: View {
                         Spacer(minLength: Design.px(20))
                         Text(note)
                             .font(Typography.cardBody)
-                            .foregroundStyle(Palette.textSecondary)
+                            .foregroundStyle(secondaryInk)
                             .lineLimit(1)
                     }
                 }
                 if let subtitle {
                     Text(subtitle)
                         .font(Typography.cardBody)
-                        .foregroundStyle(Palette.textSecondary)
+                        .foregroundStyle(secondaryInk)
                         .lineLimit(1)
                 }
             }
@@ -266,10 +325,11 @@ struct SplitRow<Accessory: View>: View {
     let leading: String
     let trailing: String
     var leadingColor: Color = Palette.textPrimary
-    var trailingColor: Color = Palette.textSecondary
+    var trailingColor: Color? = nil
     /// Sits immediately before the trailing text, inside the same group, so it
     /// travels with the word instead of drifting to the middle of the row.
     @ViewBuilder var accessory: () -> Accessory
+    @Environment(\.tooltipSecondaryInk) private var secondaryInk
 
     var body: some View {
         HStack(spacing: Design.px(20)) {
@@ -277,7 +337,7 @@ struct SplitRow<Accessory: View>: View {
             Spacer(minLength: 0)
             HStack(spacing: NotchLayout.statusDotGap) {
                 accessory()
-                Text(trailing).foregroundStyle(trailingColor)
+                Text(trailing).foregroundStyle(trailingColor ?? secondaryInk)
             }
         }
         .font(Typography.cardBody)
@@ -289,7 +349,7 @@ extension SplitRow where Accessory == EmptyView {
     init(leading: String,
          trailing: String,
          leadingColor: Color = Palette.textPrimary,
-         trailingColor: Color = Palette.textSecondary) {
+         trailingColor: Color? = nil) {
         self.init(leading: leading, trailing: trailing,
                   leadingColor: leadingColor, trailingColor: trailingColor,
                   accessory: { EmptyView() })
@@ -367,8 +427,14 @@ private struct LimitWindowRow: View {
     let resetTimeFormat: ResetTimeFormat
     let showsUsagePace: Bool
     @Environment(\.codenotchAccentColor) private var accentColor
+    @Environment(\.usageWatchLimit) private var watchLimit
+    @Environment(\.usageCriticalLimit) private var criticalLimit
+    @Environment(\.tooltipSecondaryInk) private var secondaryInk
 
-    private var band: UsageBand { UsageBand.band(for: window.usedFraction ?? 0) }
+    private var band: UsageBand {
+        if let override = window.bandOverride { return override }
+        return UsageBand.band(for: window.usedFraction ?? 0, watchLimit: watchLimit, criticalLimit: criticalLimit)
+    }
     private var trackWidth: CGFloat { NotchLayout.cardWidth - 2 * NotchLayout.cardPadding - inset }
     private var fillWidth: CGFloat {
         let fraction = CGFloat(min(max(window.usedFraction ?? 0, 0), 1))
@@ -380,7 +446,7 @@ private struct LimitWindowRow: View {
             return Text("")
         }
         return Text(" · \(pace.summary)")
-            .foregroundColor(pace.isDeficit ? .orange : Palette.textSecondary)
+            .foregroundColor(pace.isDeficit ? .orange : secondaryInk)
     }
 
     /// Blank rather than invented: some providers never say when the window rolls.
@@ -398,8 +464,7 @@ private struct LimitWindowRow: View {
         if let money = window.money {
             MoneyBreakdownView(title: window.label, money: money, fidelity: fidelity)
         } else if isCountRow {
-            SplitRow(leading: window.label, trailing: window.detail ?? window.usedText ?? "\(window.used ?? 0)",
-                     trailingColor: Palette.textSecondary)
+            SplitRow(leading: window.label, trailing: window.detail ?? window.usedText ?? "\(window.used ?? 0)")
         } else {
             VStack(alignment: .leading, spacing: 0) {
                 SplitRow(leading: window.label, trailing: resetText)
@@ -431,6 +496,8 @@ private struct MoneyBreakdownView: View {
     let money: UsageMoneyBreakdown
     let fidelity: Fidelity
     @Environment(\.codenotchAccentColor) private var accentColor
+    @Environment(\.usageWatchLimit) private var watchLimit
+    @Environment(\.usageCriticalLimit) private var criticalLimit
 
     private var symbol: String {
         switch money.currency.uppercased() {
@@ -452,7 +519,7 @@ private struct MoneyBreakdownView: View {
             GeometryReader { proxy in
                 HStack(spacing: 0) {
                     Rectangle()
-                        .fill(UsageBand.band(for: money.spentFraction).color(accent: accentColor))
+                        .fill(UsageBand.band(for: money.spentFraction, watchLimit: watchLimit, criticalLimit: criticalLimit).color(accent: accentColor))
                         .frame(width: proxy.size.width * CGFloat(money.spentFraction))
                     Rectangle().fill(Palette.barTrack)
                 }
@@ -463,7 +530,7 @@ private struct MoneyBreakdownView: View {
 
             HStack(spacing: NotchLayout.blockSpacing) {
                 MoneyStat(label: L10n.t("Spent"), value: amount(money.spent), color: accentColor)
-                MoneyStat(label: L10n.t("Remaining"), value: amount(money.remaining), color: Palette.textSecondary)
+                MoneyStat(label: L10n.t("Remaining"), value: amount(money.remaining))
                 MoneyStat(label: L10n.t("Funded"), value: amount(money.funded), color: Palette.textPrimary)
             }
             .frame(width: NotchLayout.cardTextWidth)
@@ -475,12 +542,13 @@ private struct MoneyBreakdownView: View {
 private struct MoneyStat: View {
     let label: String
     let value: String
-    let color: Color
+    var color: Color? = nil
+    @Environment(\.tooltipSecondaryInk) private var secondaryInk
 
     var body: some View {
         VStack(alignment: .leading, spacing: NotchLayout.moneyStatGap) {
-            Text(label).foregroundStyle(Palette.textSecondary).lineLimit(1)
-            Text(value).foregroundStyle(color).monospacedDigit().lineLimit(1)
+            Text(label).foregroundStyle(secondaryInk).lineLimit(1)
+            Text(value).foregroundStyle(color ?? secondaryInk).monospacedDigit().lineLimit(1)
         }
         .font(Typography.cardBody)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -494,6 +562,7 @@ private struct ProviderTooltip: View {
     let now: Date
     let resetTimeFormat: ResetTimeFormat
     let showUsagePace: Bool
+    @Environment(\.tooltipSecondaryInk) private var secondaryInk
 
     /// Only worth saying when the numbers are not current. A remembered reading
     /// has to be dated, or it quietly passes itself off as live.
@@ -529,7 +598,7 @@ private struct ProviderTooltip: View {
                           : L10n.t("\(snapshot.displayName) Usage"),
                           subtitle: snapshot.plan,
                           note: activityNote ?? (snapshot.localModel?.brand != nil ? snapshot.displayName : readingAge)) {
-                ProviderGlyphView(glyph: snapshot.glyph)
+                ProviderGlyphView(glyph: snapshot.glyph, customIconFilename: snapshot.customIconFilename)
                     .foregroundStyle(Palette.textPrimary)
             }
 
@@ -541,7 +610,7 @@ private struct ProviderTooltip: View {
             if let message = snapshot.statusMessage {
                 Text(message)
                     .font(Typography.cardBody)
-                    .foregroundStyle(Palette.textSecondary)
+                    .foregroundStyle(secondaryInk)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.top, NotchLayout.headerToBlock)
             } else if let localModel = snapshot.localModel {
@@ -607,7 +676,7 @@ private struct RuntimeModelDetails: View {
             VStack(spacing: NotchLayout.sessionRowGap) {
                 if showsPerformance {
                     SplitRow(leading: "Last speed (derived)", trailing: performance?.speedText ?? "Not measured",
-                             trailingColor: performance?.band.color ?? Palette.textSecondary)
+                             trailingColor: performance?.band.color)
                     SplitRow(leading: "Speed band", trailing: performance?.band.label ?? "—")
                 }
                 SplitRow(leading: model.memoryLabel, trailing: model.displayedMemoryBytes == nil ? "Unavailable" : model.memoryText)
@@ -675,6 +744,7 @@ private struct CodexMetric: Identifiable {
 
 private struct CodexMetricList: View {
     let metrics: [CodexMetric]
+    @Environment(\.tooltipSecondaryInk) private var secondaryInk
 
     var body: some View {
         VStack(alignment: .leading, spacing: NotchLayout.codexMetricRowGap) {
@@ -689,7 +759,7 @@ private struct CodexMetricList: View {
 
                     Text(metric.value)
                         .font(Typography.cardBody)
-                        .foregroundStyle(Palette.textSecondary)
+                        .foregroundStyle(secondaryInk)
                         .lineLimit(1)
                         .monospacedDigit()
                 }
@@ -703,6 +773,7 @@ private struct CodexMetricList: View {
 private struct CodexDailyUsageChart: View {
     let buckets: [CodexTokenUsage.DailyBucket]
     let maximum: Int
+    @Environment(\.tooltipSecondaryInk) private var secondaryInk
 
     var body: some View {
         GeometryReader { proxy in
@@ -714,7 +785,7 @@ private struct CodexDailyUsageChart: View {
                 HStack(alignment: .bottom, spacing: Design.px(4)) {
                     ForEach(buckets) { bucket in
                         RoundedRectangle(cornerRadius: Design.px(3), style: .continuous)
-                            .fill(Palette.textSecondary)
+                            .fill(secondaryInk)
                             .frame(maxWidth: .infinity)
                             .frame(height: proxy.size.height
                                    * CGFloat(bucket.tokens) / CGFloat(maximum))
@@ -732,6 +803,7 @@ private struct CodexDailyUsageChart: View {
 private struct CodexResetCreditsSection: View {
     let credits: CodexResetCredits
     let now: Date
+    @Environment(\.tooltipSecondaryInk) private var secondaryInk
 
     private var countText: String {
         switch credits.availableCount {
@@ -774,7 +846,7 @@ private struct CodexResetCreditsSection: View {
                 if let expiryText {
                     Text(expiryText)
                         .font(Typography.cardBody)
-                        .foregroundStyle(Palette.textSecondary)
+                        .foregroundStyle(secondaryInk)
                         .lineLimit(1)
                         .padding(.top, NotchLayout.codexUsageRowGap)
                 }
@@ -886,13 +958,14 @@ private struct SessionRow: View {
     /// Set when rows can be clicked to jump to the session's terminal.
     var onFocus: ((pid_t) -> Void)? = nil
     @Environment(\.codenotchAccentColor) private var accentColor
+    @Environment(\.tooltipSecondaryInk) private var secondaryInk
 
     private var stateColor: Color {
         switch session.state {
         case .busy:    return Palette.textPrimary
         case .waiting: return Palette.watch
         case .success: return Palette.ample
-        case .idle:    return Palette.textSecondary
+        case .idle:    return secondaryInk
         }
     }
 
@@ -922,7 +995,7 @@ private struct SessionRow: View {
             SplitRow(
                 leading: detail,
                 trailing: ElapsedCopy.text(since: session.since, now: now),
-                leadingColor: Palette.textSecondary
+                leadingColor: secondaryInk
             )
             .padding(.top, NotchLayout.sessionRowGap)
         }
@@ -944,6 +1017,7 @@ private struct SessionList: View {
     /// How many rows this screen has room for; the rest are counted.
     let cap: Int
     var onFocus: ((pid_t) -> Void)? = nil
+    @Environment(\.tooltipSecondaryInk) private var secondaryInk
 
     /// Busy sessions first, so what is hidden is what matters least.
     private var ordered: [AgentSession] {
@@ -976,7 +1050,7 @@ private struct SessionList: View {
             if hidden > 0 {
                 Text(L10n.t("and \(hidden) more"))
                     .font(Typography.cardBody)
-                    .foregroundStyle(Palette.textSecondary)
+                    .foregroundStyle(secondaryInk)
                     .padding(.top, NotchLayout.blockSpacing)
             }
         }
@@ -1024,7 +1098,7 @@ struct TooltipCard: View {
             blockMessage: snapshot.block?.summary(now: now),
             hasTokenUsage: snapshot.tokenUsage != nil,
             hasPlan: snapshot.plan != nil,
-            hasResetCredits: snapshot.resetCredits != nil,
+            hasResetCredits: snapshot.hasAvailableResetCredits,
             localModelName: snapshot.localModel?.name,
             showsLocalPerformance: snapshot.showsLocalPerformance,
                 localLedgerRows: snapshot.localLedgerRowCount,
@@ -1043,7 +1117,8 @@ struct TooltipCard: View {
                 VStack(alignment: .leading, spacing: 0) {
                     ProviderTooltip(activityNote: localActivityNote, snapshot: snapshot, now: now, resetTimeFormat: resetTimeFormat,
                                     showUsagePace: showUsagePace)
-                    if let resetCredits = snapshot.resetCredits {
+                    if let resetCredits = snapshot.resetCredits,
+                       snapshot.hasAvailableResetCredits {
                         CodexResetCreditsSection(credits: resetCredits, now: now)
                     }
                     if let tokenUsage = snapshot.tokenUsage {

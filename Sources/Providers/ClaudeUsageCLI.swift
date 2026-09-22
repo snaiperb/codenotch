@@ -206,7 +206,9 @@ struct ClaudeUsageCLI: Sendable {
         process.standardInput = FileHandle.nullDevice
         let output = Pipe()
         process.standardOutput = output
-        process.standardError = Pipe()
+        // Discarded, not piped: a pipe nobody reads fills at 64 KB and stalls
+        // the CLI until the watchdog kills it.
+        process.standardError = FileHandle.nullDevice
 
         try process.run()
 

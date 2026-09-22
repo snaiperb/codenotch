@@ -8,7 +8,7 @@
 //!
 //! None of those → the page falls back to a letter.
 //! SVGs are inlined into the DOM as text (`fill="currentColor"` follows the CSS white/dimmed state);
-//! PNGs and app icons go through <img>. Ids match the page and upstream: claude / codex / cursor / gemini.
+//! PNGs and app icons go through <img>. Ids match the page and upstream: claude / codex / cursor / grok / gemini.
 
 use serde::Serialize;
 use std::collections::HashMap;
@@ -26,13 +26,14 @@ pub struct Glyph {
     pub source: String,
 }
 
-pub const IDS: [&str; 5] = ["claude", "codex", "cursor", "gemini", "grok"];
+pub const IDS: [&str; 5] = ["claude", "codex", "cursor", "grok", "gemini"];
 
 /// Built-in artwork (@lobehub/icons-static-svg, MIT): the OpenAI mark for codex (matching upstream's glyph choice), the Antigravity mark for gemini
 const BUILTIN: [(&str, &str); 5] = [
     ("claude", include_str!("../glyphs/claude.svg")),
     ("codex", include_str!("../glyphs/codex.svg")),
     ("cursor", include_str!("../glyphs/cursor.svg")),
+    ("grok", include_str!("../glyphs/grok.svg")),
     ("gemini", include_str!("../glyphs/gemini.svg")),
     ("grok", include_str!("../glyphs/grok.svg")),
 ];
@@ -308,7 +309,7 @@ pub fn collect() -> HashMap<String, Glyph> {
 /// For doctor
 pub fn probe() -> String {
     let m = collect();
-    let mut lines = vec![format!("glyph directory: {} (drop claude/codex/cursor/gemini .svg or .png files here)", user_dir().display())];
+    let mut lines = vec![format!("glyph directory: {} (drop claude/codex/cursor/grok/gemini .svg or .png files here)", user_dir().display())];
     for id in IDS {
         lines.push(match m.get(id) {
             Some(g) => format!("  {id}: {} ← {}", g.kind, g.source),
