@@ -737,6 +737,7 @@ fn ring_window<'a>(
     // window instead; the card still lists every window either way.)
     match provider {
         "claude" | "codex" | "cursor" => tightest(windows.iter()).or_else(|| windows.first()),
+        p if p.ends_with("_api") => windows.first(), // a dollar cell: the month, as its ring
         _ => antigravity_lane(windows, antigravity_limit, antigravity_model),
     }
 }

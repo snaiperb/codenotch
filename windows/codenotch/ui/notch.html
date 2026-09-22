@@ -316,6 +316,8 @@ function laneIs(w,limit){
 function headlineOf(snap,id){
   const ws=snap.windows; if(!ws.length) return null;
   // The ring shows the window that will stop you first — the fullest one (same rule as ring_window in main.rs)
+  // A dollar cell's figure is the month - the same window its ring draws - never today's slice
+  if(/_api$/.test(id)) return ws[0];
   if(id==='claude'||id==='codex'||id==='cursor') return tightestOf(ws)||ws[0];
   const fam=ws.filter(w=>laneFamily(w)===agPrefs.model), lanes=fam.length?fam:ws;
   if(agPrefs.limit!=='automatic'){ const w=tightestOf(lanes.filter(w=>laneIs(w,agPrefs.limit))); if(w) return w; }
