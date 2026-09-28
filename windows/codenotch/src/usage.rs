@@ -40,6 +40,10 @@ const RENEW_COOLDOWN_MS: u64 = 10 * 60 * 1000;
 const RENEW_RETRY_CAP_MS: u64 = 60 * 60 * 1000;
 const RENEW_TIMEOUT_SECS: u64 = 30;
 const EXPIRED_NOTE: &str = "Credential expired — run claude once in a terminal to renew it";
+/// The token is past its expiry, renewal has failed repeatedly and the server is reachable: the refresh itself is
+/// being refused (a revoked sign-in), and no number of `claude` runs will bring it back — only signing in again will.
+const SIGNED_OUT_NOTE: &str = "Signed out of Claude — sign in again to resume readings";
+const SIGNED_OUT_AFTER: u32 = 2;
 
 static REFRESH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
@@ -305,6 +309,20 @@ fn should_renew(
     // on a doubling wait, so a token that cannot renew does not become a launch every tick
     let wait = if attempted_for == Some(exp) { retry_wait_ms(failures) } else { RENEW_COOLDOWN_MS };
     now.saturating_sub(t) >= wait
+}
+
+/// Renewal has been tried for this very expiry `SIGNED_OUT_AFTER` times and never moved it
+fn renewal_refused(expires_at: Option<u64>, attempted_for: Option<u64>, failures: u32) -> bool {
+    expires_at.is_some() && attempted_for == expires_at && failures >= SIGNED_OUT_AFTER
+}
+
+/// Any HTTP answer at all (the usage endpoint says 401 without a token) means the network is up, so a renewal that
+/// keeps failing is a refusal rather than a laptop that is offline or asleep
+fn api_reachable() -> bool {
+    matches!(
+        ureq::get(ENDPOINT).timeout(Duration::from_secs(10)).call(),
+        Ok(_) | Err(ureq::Error::Status(..))
+    )
 }
 
 fn retry_wait_ms(failures: u32) -> u64 {
@@ -635,8 +653,18 @@ fn poll_account(p: &Profile, acc: &mut Account, group: Option<&str>) {
         }
         // Expired is not signed out: keep the last reading, dimmed and dated, and send nothing
         Some(cred) if cred.expired(now_ms()) => {
-            acc.status = if acc.windows.is_empty() { "needsAuth" } else { "stale" }.into();
-            acc.note = EXPIRED_NOTE.into();
+            let r = &acc.renewer;
+            if renewal_refused(cred.expires_at, r.attempted_for, r.failures) && api_reachable() {
+                // needsAuth is what puts the Sign in button on the card; the last reading stays listed under it
+                if acc.status != "needsAuth" {
+                    crate::applog(&format!("claude[{who}]: renewal refused with the network up — sign-in needed"));
+                }
+                acc.status = "needsAuth".into();
+                acc.note = SIGNED_OUT_NOTE.into();
+            } else {
+                acc.status = if acc.windows.is_empty() { "needsAuth" } else { "stale" }.into();
+                acc.note = EXPIRED_NOTE.into();
+            }
         }
         Some(cred) => {
             let token = cred.token;
@@ -919,5 +947,18 @@ mod scoped_label_tests {
         let w = super::parse_response(&v);
         assert_eq!(w.iter().find(|w| w.id == "weekly_scoped").unwrap().label, "Fable this week");
         assert_eq!(w.iter().find(|w| w.id == "weekly_all").unwrap().label, "Weekly (all models)");
+    }
+}
+
+#[cfg(test)]
+mod signed_out_tests {
+    use super::renewal_refused;
+
+    #[test]
+    fn a_sign_in_is_asked_for_only_after_repeated_refusals_of_the_same_expiry() {
+        assert!(!renewal_refused(Some(10), Some(10), 1)); // one failure can be a busy CLI
+        assert!(renewal_refused(Some(10), Some(10), 2));
+        assert!(!renewal_refused(Some(11), Some(10), 5)); // a new expiry: the old failures do not count
+        assert!(!renewal_refused(None, None, 5));
     }
 }
