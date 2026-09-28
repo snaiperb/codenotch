@@ -37,6 +37,7 @@ struct ProviderRing: View {
     @Environment(\.codenotchReduceTransparency) private var reduceTransparency
     @Environment(\.usageWatchLimit) private var watchLimit
     @Environment(\.usageCriticalLimit) private var criticalLimit
+    @Environment(\.colorTransitionStyle) private var colorTransitionStyle
     @Environment(\.codenotchAccentColor) private var accentColor
     @Environment(\.weeklyRingDashed) private var weeklyRingDashed
     @State private var spin: Double = 0
@@ -58,10 +59,26 @@ struct ProviderRing: View {
         isStale ? Palette.textSecondary : band.color(accent: accentColor)
     }
 
+    /// The ring's actual stroke colour: a continuous ramp when that style is chosen, falling
+    /// back to the discrete `band.color(accent:)` in hard-step mode and everywhere `band` itself
+    /// special-cases — blocked (no fraction is meaningful once a limit is spent) and an explicit
+    /// override from the caller (a deliberate discrete choice, not a reading to interpolate).
+    private var primaryRingColor: Color {
+        guard !isBlocked, bandOverride == nil, colorTransitionStyle == .ramp else {
+            return band.color(accent: accentColor)
+        }
+        return UsageBand.rampColor(for: usedFraction ?? 0, watchLimit: watchLimit, accent: accentColor)
+    }
+
     private var weeklyBand: UsageBand {
         isBlocked ? .exhausted : UsageBand.band(for: weeklyFraction ?? 0, watchLimit: watchLimit, criticalLimit: criticalLimit)
     }
     private var weeklySweep: CGFloat { CGFloat(min(max(weeklyFraction ?? 0, 0), 1)) }
+    /// Same fallback rule as `primaryRingColor`, minus `bandOverride` — the weekly ring has none.
+    private var weeklyRingColor: Color {
+        guard !isBlocked, colorTransitionStyle == .ramp else { return weeklyBand.color(accent: accentColor) }
+        return UsageBand.rampColor(for: weeklyFraction ?? 0, watchLimit: watchLimit, accent: accentColor)
+    }
 
     /// Inside, the weekly ring and the working indicator want the same band —
     /// 1.03pt apart, one of them spinning. Rather than shave both until neither
@@ -104,7 +121,7 @@ struct ProviderRing: View {
                         .inset(by: NotchLayout.trackStroke / 2)
                         .trim(from: 0, to: sweep)
                         .stroke(
-                            band.color(accent: accentColor),
+                            primaryRingColor,
                             style: StrokeStyle(lineWidth: NotchLayout.progressStroke, lineCap: .round)
                         )
                         // Refreshing spins the reading itself rather than
@@ -147,7 +164,7 @@ struct ProviderRing: View {
                         .inset(by: inset)
                         .trim(from: 0, to: weeklySweep)
                         .stroke(
-                            weeklyBand.color(accent: accentColor),
+                            weeklyRingColor,
                             style: StrokeStyle(lineWidth: NotchLayout.weeklyRingStroke,
                                                lineCap: weeklyRingDashed ? .butt : .round,
                                                dash: weeklyRingDashed ? [4, 2] : [])
@@ -265,11 +282,22 @@ struct ProviderCell: View {
     var activity: ActivitySummary?
     var isRefreshing: Bool = false
     var weeklyRing: WeeklyRing = .off
+    /// Whether the reading adds the weekly ring's percentage, as "30%/70%".
+    var showsWeeklyReading: Bool = false
+    /// Whether the percentage is drawn under the ring.
+    ///
+    /// Off where the cell sits in a menu-bar strip beside the hardware notch:
+    /// the strip is the menu bar's height, which one ring already fills, and a
+    /// second line would be drawn in the bezel. The reading is still a hover
+    /// away in the card.
+    var showsReading: Bool = true
 
-    /// A dash, not "0%": nothing read is not the same as nothing used.
-    private var readingText: String {
-        snapshot.hasReading ? snapshot.headlineText : "—"
+    private var reading: ProviderReading {
+        ProviderReading(snapshot: snapshot, weeklyRing: weeklyRing,
+                        showsWeeklyReading: showsWeeklyReading)
     }
+
+    private var readingText: String { reading.text }
 
     var body: some View {
         VStack(spacing: NotchLayout.ringLabelGap) {
@@ -287,19 +315,7 @@ struct ProviderCell: View {
                 weeklyRing: weeklyRing,
                 bandOverride: snapshot.bandOverride
             )
-            Text(readingText)
-                .font(Typography.percent)
-                .foregroundStyle(snapshot.showsLocalPerformance && snapshot.localPerformance == nil
-                                 ? Palette.textSecondary : Palette.textPrimary)
-                // Keep local speeds inside the ring's column so longer units
-                // cannot consume the notch's existing side margins.
-                .lineLimit(1)
-                .minimumScaleFactor(snapshot.localModel == nil ? 1 : 0.5)
-                .fixedSize(horizontal: snapshot.localModel == nil, vertical: false)
-                .frame(width: snapshot.localModel == nil ? nil : NotchLayout.ringDiameter,
-                       height: NotchLayout.percentLineHeight)
-                .contentTransition(.numericText())
-                .animation(NotchMotion.reading, value: readingText)
+            if showsReading { reading }
         }
         .frame(height: NotchLayout.cellExtent)
         .accessibilityElement(children: .ignore)
@@ -447,5 +463,85 @@ final class SpinningArcView: NSView {
         turn.repeatCount = .infinity
         turn.isRemovedOnCompletion = false
         arc.add(turn, forKey: Self.animationKey)
+    }
+}
+
+/// **A cell's percentage**, on its own: under its ring, or — merged into the
+/// Mac's notch with a single ring — on the other side of the Mac's notch,
+/// where the notch widens with nothing else to carry.
+struct ProviderReading: View {
+    let snapshot: ProviderSnapshot
+    var weeklyRing: WeeklyRing = .off
+    /// Whether the reading adds the weekly ring's percentage, as "30%/70%".
+    var showsWeeklyReading: Bool = false
+    /// Drawn on its own across the Mac's notch rather than under the ring: the
+    /// larger size, and no more room along the bar than `width`.
+    var across: CGFloat? = nil
+    /// Which end of that room it sits at — the Mac's notch's.
+    var acrossAlignment: Alignment = .leading
+
+    /// A dash, not "0%": nothing read is not the same as nothing used.
+    var text: String {
+        guard snapshot.hasReading else { return "—" }
+        guard let weekly = weeklyReading else { return snapshot.headlineText }
+        return "\(snapshot.headlineText)/\(Percent.text(for: weekly))%"
+    }
+
+    /// What the weekly ring draws, when it and its reading are on. The pair
+    /// mirrors the two rings, so with the weekly limit as the main ring or the
+    /// daily pace ring the second number is the session, as the thin ring is.
+    ///
+    /// Only after a percentage: a count or a cost with a percentage after it
+    /// would read as one quantity, and it is not.
+    private var weeklyReading: Double? {
+        guard showsWeeklyReading, weeklyRing != .off, snapshot.localModel == nil,
+              snapshot.usedFraction != nil, snapshot.headline?.prefersUsedText != true
+        else { return nil }
+        return snapshot.weeklyFraction
+    }
+
+    /// Whether it reads as the pair, "30%/70%".
+    var isPair: Bool { snapshot.hasReading && weeklyReading != nil }
+
+    /// How wide it is drawn across the Mac's notch, in design points — what
+    /// the side carrying it is sized to.
+    var acrossWidth: CGFloat {
+        let size = isPair ? Typography.percentPairAcrossSize : Typography.percentAcrossSize
+        let font = NSFont.monospacedDigitSystemFont(ofSize: size, weight: .semibold)
+        return ceil((text as NSString).size(withAttributes: [.font: font]).width)
+    }
+
+    var body: some View {
+        if let width = across {
+            Text(text)
+                .font(isPair ? Typography.percentPairAcross : Typography.percentAcross)
+                .monospacedDigit()
+                .foregroundStyle(snapshot.showsLocalPerformance && snapshot.localPerformance == nil
+                                 ? Palette.textSecondary : Palette.textPrimary)
+                .lineLimit(1)
+                // Never into the side's own curved end: smaller before that.
+                .minimumScaleFactor(0.4)
+                .frame(width: width, alignment: acrossAlignment)
+                .contentTransition(.numericText())
+                .animation(NotchMotion.reading, value: text)
+        } else {
+            underTheRing
+        }
+    }
+
+    private var underTheRing: some View {
+        Text(text)
+            .font(snapshot.hasReading && weeklyReading != nil ? Typography.percentPair : Typography.percent)
+            .foregroundStyle(snapshot.showsLocalPerformance && snapshot.localPerformance == nil
+                             ? Palette.textSecondary : Palette.textPrimary)
+            // Keep local speeds inside the ring's column so longer units
+            // cannot consume the notch's existing side margins.
+            .lineLimit(1)
+            .minimumScaleFactor(snapshot.localModel == nil ? 1 : 0.5)
+            .fixedSize(horizontal: snapshot.localModel == nil, vertical: false)
+            .frame(width: snapshot.localModel == nil ? nil : NotchLayout.ringDiameter,
+                   height: NotchLayout.percentLineHeight)
+            .contentTransition(.numericText())
+            .animation(NotchMotion.reading, value: text)
     }
 }

@@ -279,7 +279,9 @@ struct UsageBlock: Equatable {
 
 struct ProviderSnapshot: Identifiable, Equatable {
     let id: String
-    let displayName: String
+    /// The provider's own name, or the one chosen for the account in
+    /// Settings; the store swaps it in before anything reads the snapshot.
+    var displayName: String
     let glyph: ProviderGlyph
     let fidelity: Fidelity
     var status: ProviderStatus
@@ -338,20 +340,27 @@ struct ProviderSnapshot: Identifiable, Equatable {
     /// the tooltip title. Nil when there is nothing to name.
     var plan: String? = nil
 
-    /// Unused rate-limit resets on this Codex account, listed by the same
-    /// backend as usage.
-    var resetCredits: CodexResetCredits? = nil
+    /// Unused rate-limit resets reported for this account.
+    var resetCredits: UsageResetCredits? = nil
 
-    /// Whether the Codex tooltip has a reset-credit section to draw.
+    /// Whether the tooltip has a reset-credit section to draw.
     ///
     /// The endpoint can successfully return an empty result. That is data,
     /// but it is not useful card content and must not reserve layout space.
     var hasAvailableResetCredits: Bool {
-        (resetCredits?.availableCount ?? 0) > 0
+        availableResetCredits(at: Date()) != nil
     }
+    func availableResetCredits(at now: Date) -> UsageResetCredits? {
+        guard let credits = resetCredits?.unexpired(at: now), credits.availableCount > 0 else { return nil }
+        return credits
+    }
+
     /// Provider-owned online usage detail, such as DeepSeek's API key/model
     /// breakdown and daily token/cost series.
     var usageDetail: ProviderUsageDetail? = nil
+
+    /// Locally sampled cumulative token usage for a custom endpoint.
+    var customUsageHistory: [CustomEndpointUsageDay]? = nil
 
     /// The number on the cell: the provider's declared primary window — for
     /// Claude, the current session.
@@ -485,6 +494,9 @@ struct ProviderSnapshot: Identifiable, Equatable {
         case "opencode":   return L10n.t("Connect the Go plan in OpenCode to read your usage", locale: locale)
         case "commandcode": return L10n.t("Sign in with the Command Code app to read your usage", locale: locale)
         case "kiro":       return L10n.t("Sign in with kiro-cli to read your usage", locale: locale)
+        case "amp":        return L10n.t("Run amp login in Terminal to read your usage", locale: locale)
+        case "apify":      return L10n.t("Run apify login in Terminal, or paste an Apify API token in Settings", locale: locale)
+        case "kilo":       return L10n.t("Sign in with the Kilo CLI to read your usage", locale: locale)
         // Two Ollamas, and they are stuck for different reasons: the hosted
         // one wants a key, the local one wants the daemon running.
         case "ollama":       return L10n.t("Enter an Ollama API key in Settings, or export OLLAMA_API_KEY", locale: locale)
