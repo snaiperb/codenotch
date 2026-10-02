@@ -38,7 +38,9 @@ const RENEW_MARGIN_MS: u64 = 4 * 60 * 1000;
 const RENEW_COOLDOWN_MS: u64 = 10 * 60 * 1000;
 /// A token that did not renew is tried again, each wait twice the last, never more than an hour apart
 const RENEW_RETRY_CAP_MS: u64 = 60 * 60 * 1000;
-const RENEW_TIMEOUT_SECS: u64 = 30;
+// Killing claude between the refresh request and its write of the new pair leaves a consumed refresh token on
+// disk — the next use is a replay and the sign-in is revoked — so a slow start is given room rather than cut short
+const RENEW_TIMEOUT_SECS: u64 = 90;
 const EXPIRED_NOTE: &str = "Credential expired — run claude once in a terminal to renew it";
 /// The token is past its expiry, renewal has failed repeatedly and the server is reachable: the refresh itself is
 /// being refused (a revoked sign-in), and no number of `claude` runs will bring it back — only signing in again will.
@@ -325,6 +327,49 @@ fn api_reachable() -> bool {
     )
 }
 
+/// How many Claude Code CLI processes are running right now, or None when there are none. The desktop
+/// app's own processes are called claude.exe too and sign in on their own: only the CLI image counts,
+/// told apart by the path the process was started from.
+#[cfg(windows)]
+fn other_claude_running() -> Option<usize> {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    let maps = crate::focus::proc_maps();
+    let mut n = 0usize;
+    for (pid, name) in &maps.name {
+        if name != "claude.exe" {
+            continue;
+        }
+        unsafe {
+            let Ok(h) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, *pid) else { continue };
+            let mut buf = [0u16; 1024];
+            let mut len = buf.len() as u32;
+            let ok = QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, windows::core::PWSTR(buf.as_mut_ptr()), &mut len).is_ok();
+            let _ = CloseHandle(h);
+            if !ok {
+                continue;
+            }
+            let path = String::from_utf16_lossy(&buf[..len as usize]).to_lowercase();
+            if is_cli_image(&path) {
+                n += 1;
+            }
+        }
+    }
+    (n > 0).then_some(n)
+}
+#[cfg(not(windows))]
+fn other_claude_running() -> Option<usize> {
+    None
+}
+
+/// The standalone CLI lives under .local\\bin (or wherever `find_cli` looks); the desktop app under
+/// AppData\\Local\\AnthropicClaude\\app-<version>\\claude.exe
+fn is_cli_image(path_lower: &str) -> bool {
+    !is_desktop_owned(std::path::Path::new(path_lower))
+}
+
 fn retry_wait_ms(failures: u32) -> u64 {
     RENEW_COOLDOWN_MS.saturating_mul(1u64 << failures.min(16)).min(RENEW_RETRY_CAP_MS)
 }
@@ -387,6 +432,16 @@ impl Renewer {
         self.last_attempt = Some(now);
         self.attempted_for = cred.expires_at;
         self.failures = self.failures.saturating_add(1);
+        // The refresh token is single-use: the server rotates it on every refresh and treats a second use of
+        // the old one as a replay, revoking the whole sign-in. A claude already running (a terminal session,
+        // the desktop app's agent, a scheduled job) will refresh this same token itself, so a launch now would
+        // race it. Stand aside and let that one do it; this attempt is not counted as a failure.
+        if let Some(n) = other_claude_running() {
+            crate::applog(&format!("claude[{who}]: {n} claude process(es) already running — leaving the renewal to them"));
+            self.last_attempt = None;
+            self.failures = self.failures.saturating_sub(1);
+            return None;
+        }
         let Some(cli) = find_cli() else {
             crate::applog(&format!(
                 "claude[{who}]: token about to expire and no standalone claude CLI found to renew it"
@@ -960,5 +1015,14 @@ mod signed_out_tests {
         assert!(renewal_refused(Some(10), Some(10), 2));
         assert!(!renewal_refused(Some(11), Some(10), 5)); // a new expiry: the old failures do not count
         assert!(!renewal_refused(None, None, 5));
+    }
+}
+
+#[cfg(test)]
+mod cli_image_tests {
+    #[test]
+    fn the_desktop_app_is_not_the_cli() {
+        assert!(!super::is_cli_image(r"c:\users\roman\appdata\local\anthropicclaude\app-2.1.0\claude.exe"));
+        assert!(super::is_cli_image(r"c:\users\roman\.local\bin\claude.exe"));
     }
 }
