@@ -932,6 +932,8 @@ const PATTERNS={
   ru:[
     [/^(\d+)m limit$/,'Лимит на $1 мин'],
     [/^This month · budget (.+)$/,'Этот месяц · бюджет $1'],
+    [/Admin key rejected \(401\/403\) — check it in Settings → API spend/g,'Ключ администратора отклонён (401/403) — замените его в Настройки → Расход API'],
+    [/Management key rejected \(401\/403\) — check it in Settings → API spend/g,'Management-ключ отклонён (401/403) — замените его в Настройки → Расход API'],
     [/Signed out of Claude — sign in again to resume readings/g,'Вход в Claude сброшен — войдите заново, чтобы снова видеть лимиты'],
     [/^(.+) this week$/,'$1 — эта неделя'],
     [/^(\d+)h limit$/,'Лимит на $1 ч'],
@@ -1381,7 +1383,10 @@ function renderCard(){
   if(staleOf(snap)&&snap.fetched_at) html+=`<div class="c-sub">${ui().updated(ago(snap.fetched_at))}</div>`;
   if(snap.status==='needsAuth'){
     const who={claude:'Sign in to Claude Code to see usage.',cursor:'Sign in to Cursor to see usage.',codex:'Sign in to Codex to see usage.',grok:'Run grok login to see usage.',copilot:'Run gh auth login to see usage.',opencode:'Run opencode auth login to see usage.',anthropic_api:'Enter a valid Anthropic admin key in Settings → API spend.',openai_api:'Enter a valid OpenAI admin key in Settings → API spend.',xai_api:'Enter a valid xAI management key in Settings → API spend.',gemini:'Sign in to Antigravity to see usage.'}[p.base]||'';
-    html+=`<div class="c-note">${textCopy(who)}<br>${esc(textCopy(snap.note||''))}</div>`;
+    // A dollar cell's own note already says exactly what is wrong with its key; the generic hint
+    // above it would only say the same thing twice, once in each language
+    const parts=/_api$/.test(p.base)&&snap.note?[textCopy(snap.note)]:[textCopy(who),textCopy(snap.note||'')];
+    html+=`<div class="c-note">${parts.filter(Boolean).map(esc).join('<br>')}</div>`;
   }else if(!snap.windows.length){
     html+=`<div class="c-note">${esc(textCopy(snap.note||'Waiting for first reading…'))}</div>`;
   }else{
