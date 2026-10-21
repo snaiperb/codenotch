@@ -28320,6 +28320,71 @@
         }
       }
     },
+    "A floating slab of clear glass, like the Dock. Always dark. On the top edge it stays a notch.": {
+      "extractionState": "manual",
+      "localizations": {
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dock のように浮かぶ透明なガラスの板。常にダークです。上端ではノッチのままです。"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "像程序坞一样悬浮的透明玻璃板。始终是深色。在顶部边缘仍是刘海。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "像程式塢一樣懸浮的透明玻璃板。始終是深色。在頂部邊緣仍是瀏海。"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Парящая пластина прозрачного стекла, как Dock. Всегда тёмная. У верхнего края остаётся панелью."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eine schwebende Platte aus klarem Glas, wie das Dock. Immer dunkel. Am oberen Rand bleibt sie eine Notch."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Плаваюча пластина прозорого скла, як Dock. Завжди темна. Біля верхнього краю залишається вирізом."
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dock처럼 떠 있는 투명한 유리 판입니다. 항상 어둡게 표시합니다. 위쪽 가장자리에서는 노치로 유지됩니다."
+          }
+        },
+        "uz": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dock kabi suzib turuvchi shaffof shisha plastina. Doimo qorongʻi. Yuqori chetda notch boʻlib qoladi."
+          }
+        },
+        "id": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lempeng kaca bening yang melayang, seperti Dock. Selalu gelap. Di tepi atas tetap menjadi notch."
+          }
+        },
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dock gibi yüzen, şeffaf camdan bir levha. Her zaman koyu. Üst kenarda çentik olarak kalır."
+          }
+        }
+      }
+    },
     "A second ring for the week, Liquid Glass, French, and Claude Desktop read straight from its own cache.": {
       "extractionState": "manual",
       "localizations": {
@@ -41504,6 +41569,151 @@
           "stringUnit": {
             "state": "translated",
             "value": "顏色漸變"
+          }
+        }
+      }
+    },
+    "Working indicator": {
+      "extractionState": "manual",
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Indicador de trabalho"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Індикатор роботи"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "工作指示器"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "工作指示器"
+          }
+        }
+      }
+    },
+    "Spinning arc": {
+      "extractionState": "manual",
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Arco giratório"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дуга, що обертається"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "旋转弧线"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "旋轉弧線"
+          }
+        }
+      }
+    },
+    "Breathing disc": {
+      "extractionState": "manual",
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disco pulsante"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пульсуючий диск"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "呼吸圆盘"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "呼吸圓盤"
+          }
+        }
+      }
+    },
+    "A thin white arc turns inside the ring while an agent works; queued requests become a ring of dots.": {
+      "extractionState": "manual",
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Um arco branco fino gira dentro do anel enquanto um agente trabalha; pedidos na fila viram um anel de pontos."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Тонка біла дуга обертається всередині кільця, поки агент працює; запити в черзі стають кільцем із крапок."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "代理工作时，一条细白弧线在圆环内旋转；排队的请求显示为一圈圆点。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "代理工作時，一條細白弧線在圓環內旋轉；排隊的請求顯示為一圈圓點。"
+          }
+        }
+      }
+    },
+    "A disc in the provider's brand colour breathes under its mark while an agent works, faster when requests are queued.": {
+      "extractionState": "manual",
+      "localizations": {
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Um disco na cor da marca do provedor pulsa sob o seu símbolo enquanto um agente trabalha, mais rápido quando há pedidos na fila."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Диск у фірмовому кольорі провайдера пульсує під його знаком, поки агент працює, швидше — коли є запити в черзі."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "代理工作时，供应商品牌色的圆盘在其标志下方呼吸；有排队请求时更快。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "代理工作時，供應商品牌色的圓盤在其標誌下方呼吸；有排隊請求時更快。"
           }
         }
       }
@@ -59888,6 +60098,228 @@
           "stringUnit": {
             "state": "translated",
             "value": "Не вдалося сформувати URL списку моделей"
+          }
+        }
+      }
+    },
+    "On pace for %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hochgerechnet %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Projection : %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このペースで %@"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No ritmo atual: %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "按当前速度：%@"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "按目前速度：%@"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "При таком темпе: %@"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "За такого темпу: %@"
+          }
+        }
+      }
+    },
+    "On pace to run out %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aufgebraucht voraussichtlich %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Épuisé vers le %@"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "このペースでは %@ に上限"
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esgota por volta de %@"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "预计 %@ 用完"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "預計 %@ 用完"
+          }
+        },
+        "ru": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Закончится около %@"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Закінчиться близько %@"
+          }
+        }
+      }
+    },
+    "Answer required": {
+      "extractionState": "manual"
+    },
+    "Approval required": {
+      "extractionState": "manual"
+    },
+    "OpenCode activity": {
+      "extractionState": "manual"
+    },
+    "OpenCode provider ID (optional)": {
+      "extractionState": "manual"
+    },
+    "Use the provider key from OpenCode settings. Activity is matched to this provider and the selected model. Leave empty to disable.": {
+      "extractionState": "manual"
+    },
+    "Install OpenCode bridge": {
+      "extractionState": "manual"
+    },
+    "Bridge installed. Restart OpenCode, then save this endpoint.": {
+      "extractionState": "manual"
+    },
+    "Could not install the bridge.": {
+      "extractionState": "manual"
+    },
+    "Off-peak all day on Chinese public holidays": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "中国法定节假日全天按空闲时段计价"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "中國法定節假日全天按離峰時段計價"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "中国の法定休日は終日オフピーク"
+          }
+        }
+      }
+    },
+    "Holiday dates follow the State Council's notices via holiday-cn, checked once a day.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "节假日日期依据国务院放假通知，由 holiday-cn 提供，每天检查一次。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "節假日日期依據國務院放假通知，由 holiday-cn 提供，每天檢查一次。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "休日の日付は国務院の通知に基づき holiday-cn から取得し、1 日 1 回確認します。"
+          }
+        }
+      }
+    },
+    "No dates for %lld yet, so only the rule above applies.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "尚无 %lld 年的节假日数据，暂时只按上面的规则计算。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "尚無 %lld 年的節假日資料，暫時只按上面的規則計算。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%lld 年の休日データはまだないため、上記のルールのみを適用します。"
+          }
+        }
+      }
+    },
+    "Known years: %@.": {
+      "extractionState": "manual",
+      "localizations": {
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已有年份：%@。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "已有年份：%@。"
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "取得済みの年：%@。"
           }
         }
       }

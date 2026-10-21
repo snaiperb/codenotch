@@ -13,7 +13,7 @@ documented behaviour and the wire formats.
 
 | Cell | Source | How it reads it |
 |---|---|---|
-| **Claude** | `GET https://api.anthropic.com/api/oauth/usage` with the token Claude Code keeps in `~/.claude/.credentials.json` | Session / weekly windows, 429 back-off with a persisted deadline, stale readings dimmed with their age. Renews that token by running the standalone `claude -p` shortly before it expires (Claude Code inside the desktop app never writes this file), and never sends an expired one. A thin arc spins inside the ring while a Claude session is working, and pulses amber when one is waiting on you (Claude Code hooks + transcript watcher, desktop app included). |
+| **Claude** | `GET https://api.anthropic.com/api/oauth/usage` with the token Claude Code keeps in `~/.claude/.credentials.json` | Session / weekly windows with a five-minute request-attempt floor per account, including manual refresh. 429 back-off honours the full Retry-After (seconds or HTTP-date), with per-account deadlines persisted across restarts; stale readings dimmed with their age. Renews that token by running the standalone `claude -p` shortly before it expires (Claude Code inside the desktop app never writes this file), and never sends an expired one. A thin arc spins inside the ring while a Claude session is working, and pulses amber when one is waiting on you (Claude Code hooks + transcript watcher, desktop app included). |
 | **Codex** | The local Codex sign-in in `~/.codex/auth.json` (read only, never refreshed), falling back to the newest session snapshot | Live primary/secondary windows (5h + weekly on paid plans, a monthly window on free) while Codex is signed in; Spark and Code review appear on the hover card when Codex reports them; otherwise the last snapshot, marked stale by its own timestamp. |
 | **Cursor** | The editor's own session from `state.vscdb` → `cursor.com/api/usage-summary` | Included usage / API usage / on-demand, reset at billing-cycle end. Nothing to sign into: it borrows the editor's session, so there is only ever one account. |
 | **Grok** | The Grok CLI's own session in `~/.grok/auth.json` (read only, never refreshed) → `cli-chat-proxy.grok.com/v1/billing?format=credits`, the endpoint that CLI's own `/usage` asks | The weekly Grok Build allowance, with the account on the hover card. Only a session minted by `auth.x.ai` is used — the file can also hold a customer IdP token meant for that customer's private proxy. A fresh weekly period reads 0 %, not "unmetered". |
@@ -101,6 +101,22 @@ or expose tokens through UI IPC. The interactive child has a 15-minute timeout.
 To read Claude again, click its ring or choose **Refresh now** from the notch's
 right-click menu. HTTP 403 is reported as an access/network refusal rather than claiming
 that a still-valid login has expired. Existing automatic renewal is unchanged.
+Manual refresh respects the five-minute per-account attempt floor and any
+rate-limit deadline. A newly crossed reset boundary permits one earlier attempt;
+credential renewal still runs on the existing 60-second active loop.
+
+Browser approval is only one part of sign-in: wait for the CLI terminal to report
+`Login successful`. If it reports 403 afterwards, do not interpret that as a
+successful login or repeatedly delete credentials. Check the CLI error and the
+network/account access used by that CLI; browser and terminal connectivity can
+differ. Keep authorization codes, tokens and raw debug logs out of issue reports.
+
+The Claude quota arcs and headline require a fresh successful reading whose
+reported reset has not passed. On sign-out or a stale/error response they show
+no quota arc instead of presenting a cached percentage as current. The hover
+card can retain the last known values, explicitly labelled as historical, with
+their last reported reset time. A successful refresh restores the live reading;
+this display rule does not bypass HTTP 403 or change OAuth, polling or backoff.
 
 ### Antigravity
 
@@ -222,7 +238,8 @@ position, and the data folder (`%APPDATA%\codenotch` — logs, persisted reading
 
 Notch: clicking a ring re-reads that provider, as on the Mac. Right-clicking the notch or its card
 offers **Refresh now**, the provider's usage page (**Open claude.ai**, **Open chatgpt.com**, …) and
-**Quit Codenotch**. Neither click, nor the tray, asks Claude again while its rate-limit wait runs.
+**Quit Codenotch**. Neither click nor the tray bypasses Claude's five-minute
+per-account attempt floor or its rate-limit wait.
 
 ### Where the notch sits
 
@@ -247,6 +264,12 @@ light over a dark backdrop, black over a light one, the way the iPhone's home in
 which, Codenotch reads a thin strip of the screen beside the pill twice a second while it is folded,
 and keeps only its average brightness, which is never stored or sent. With the switch off, the notch
 open, or Show set to Always show, nothing is read.
+
+**Appearance → Fold for full-screen apps**, on unless switched off, folds the notch to its pill while
+a full-screen app — a video, a game, a slideshow — is in front on its screen, whatever Show says, as
+the Mac's does. Hovering the pill still opens it, and leaving the app unfolds it again. Switch on or
+off, the notch moves to the screen's very edge meanwhile, into the room the taskbar has made for the
+app, and back when the taskbar returns.
 
 ### Icons
 

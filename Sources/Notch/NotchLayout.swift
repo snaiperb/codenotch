@@ -50,6 +50,14 @@ enum NotchLayout {
     /// The pill is small, so the region that wakes it is deliberately larger.
     static let pillHotZone = Design.px(90)
 
+    // The dock style's floating slab. Plain points, and the one pair of numbers
+    // here not quoted from the design frame: the frame has no Dock in it, so
+    // both were measured beside the real one. The gap is a distance from the
+    // screen, like `bezelBleed`, so the size setting leaves it alone; the
+    // radius belongs to the notch and is scaled with it like every other.
+    static let dockGap: CGFloat = 5
+    static let dockCornerRadius: CGFloat = 32
+
     // A provider cell
     static let ringDiameter  = Design.px(117)   // 44pt, the design spec's anchor
 
@@ -383,7 +391,9 @@ enum NotchLayout {
     }
 
     static func cardHeight(windowCount: Int, groupCount: Int = 0,
-                           moneyWindowCount: Int = 0, usageDetailGroupCount: Int = 0,
+                           moneyWindowCount: Int = 0, moneyResetCount: Int = 0,
+                           moneyProjectionCount: Int = 0,
+                           usageDetailGroupCount: Int = 0,
                            sessionCount: Int = 0,
                            sessionCap: Int = defaultSessionCap,
                            statusMessage: String? = nil,
@@ -425,6 +435,10 @@ enum NotchLayout {
             height += headerToBlock
                 + CGFloat(fullCount) * fullBlock
                 + CGFloat(moneyCount) * moneyBlock
+                // A balance with a period adds its reset line under the stats,
+                // and its forecast once there is one.
+                + CGFloat(min(max(0, moneyResetCount), moneyCount)
+                          + min(max(0, moneyProjectionCount), moneyCount)) * (moneyStatGap + cardBodyLineHeight)
                 + CGFloat(compactRowCount) * compactBlock
                 + CGFloat(windowCount - 1) * blockSpacing
             if groupCount > 0 {
