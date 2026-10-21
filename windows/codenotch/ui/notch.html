@@ -145,7 +145,7 @@
   .c-sub{font-size:11px;color:var(--ink-dim);margin-bottom:10px}
   .win{margin-top:10px}
   .w-row{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;flex-wrap:wrap;column-gap:8px}
-  .w-label{color:var(--ink-2);font-weight:600;white-space:nowrap}
+  .w-label{color:var(--ink-2);font-weight:600;min-width:0;overflow-wrap:break-word} /* a long label wraps instead of running off the card */
   .w-reset{color:var(--ink-dim);font-size:11px;white-space:nowrap;margin-left:auto} /* wrap as a whole when it does not fit; never break inside a word */
   .w-track{height:4px;border-radius:2px;background:var(--bar);margin:6px 0 4px;overflow:hidden}
   .w-fill{height:100%;border-radius:2px}
