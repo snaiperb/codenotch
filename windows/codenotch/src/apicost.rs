@@ -441,7 +441,9 @@ fn fetch_month_xai(app: Option<&AppHandle>, key: &str, month_start: u64, month_n
         }
         Err(e) => return Err(FetchErr::Other(format!("network: {e}"))),
     };
-    Ok(parse_xai(&v))
+    let buckets = parse_xai(&v);
+    log_on_change(&XAI_USAGE_TRACE, xai_usage_trace(&v, &buckets));
+    Ok(buckets)
 }
 
 /// xAI prepaid credit left on the team, in USD. The ledger's `total` is in cents with purchases
@@ -453,12 +455,105 @@ fn xai_balance(app: Option<&AppHandle>, key: &str) -> Result<f64, FetchErr> {
             .set("authorization", &format!("Bearer {key}"))
             .set("user-agent", "codenotch-windows"),
     )?;
+    log_on_change(&XAI_BALANCE_TRACE, xai_balance_trace(&v, month_bounds(now_ms() / 1000).0));
     let cents = v
         .get("total")
         .and_then(|t| t.get("val"))
         .and_then(|x| x.as_str().and_then(|s| s.parse::<f64>().ok()).or_else(|| x.as_f64()))
         .ok_or_else(|| FetchErr::Other("balance reply without total.val".into()))?;
     Ok(-cents / 100.0)
+}
+
+static XAI_USAGE_TRACE: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+static XAI_BALANCE_TRACE: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// The xAI traces go to run.log when they change, not on every quarter-hour poll.
+fn log_on_change(last: &std::sync::Mutex<String>, line: String) {
+    let mut last = last.lock().unwrap_or_else(|e| e.into_inner());
+    if *last != line {
+        crate::applog(&line);
+        *last = line;
+    }
+}
+
+/// One run.log line per xAI usage reply — enough to tell "xAI has no newer charges yet" from
+/// "we dropped them". Nothing secret: counts, one raw timestamp, and the last days with spend.
+fn xai_usage_trace(v: &serde_json::Value, buckets: &[Bucket]) -> String {
+    let series = v.get("timeSeries").and_then(|s| s.as_array());
+    let (mut points, mut unparsed, mut sample) = (0usize, 0usize, String::new());
+    for ts in series.into_iter().flatten() {
+        for p in ts.get("dataPoints").and_then(|d| d.as_array()).into_iter().flatten() {
+            points += 1;
+            let t = p.get("timestamp");
+            if sample.is_empty() {
+                sample = t.map(|t| t.to_string()).unwrap_or_else(|| "none".into()).chars().take(40).collect();
+            }
+            if t.and_then(|t| t.as_str()).and_then(parse_rfc3339_secs).is_none() {
+                unparsed += 1;
+            }
+        }
+    }
+    let mut days: Vec<&Bucket> = buckets.iter().filter(|b| b.usd != 0.0).collect();
+    days.sort_by_key(|b| b.start_secs);
+    let recent = days
+        .iter()
+        .rev()
+        .take(4)
+        .rev()
+        .map(|b| {
+            let day: String = rfc3339_utc(b.start_secs).chars().take(10).collect();
+            format!("{day} ${:.4}", b.usd)
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "xai_api: usage — {} series, {points} points, limitReached={}, ts e.g. {sample}, unparsed {unparsed}; last days with spend: {}",
+        series.map(|s| s.len()).unwrap_or(0),
+        v.get("limitReached").map(|x| x.to_string()).unwrap_or_else(|| "?".into()),
+        if recent.is_empty() { "none".to_string() } else { recent }
+    )
+}
+
+/// One run.log line per balance read: how many ledger entries, what this month's SPEND entries
+/// add up to, and the newest three — so a balance that "never moves" shows whether xAI posted
+/// anything since.
+fn xai_balance_trace(v: &serde_json::Value, month_start: u64) -> String {
+    let changes: Vec<&serde_json::Value> = v.get("changes").and_then(|c| c.as_array()).map(|c| c.iter().collect()).unwrap_or_default();
+    let ts_of = |c: &serde_json::Value| -> String {
+        c.get("createTs")
+            .or_else(|| c.get("createTime"))
+            .map(|t| t.as_str().map(|s| s.to_string()).unwrap_or_else(|| t.to_string()))
+            .unwrap_or_default()
+    };
+    let usd_of = |c: &serde_json::Value| -> f64 {
+        c.get("amount")
+            .and_then(|a| a.get("val"))
+            .and_then(|x| x.as_str().and_then(|s| s.parse::<f64>().ok()).or_else(|| x.as_f64()))
+            .unwrap_or(0.0)
+            / 100.0
+    };
+    let origin_of = |c: &serde_json::Value| -> String {
+        c.get("changeOrigin").and_then(|o| o.as_str()).unwrap_or("?").to_string()
+    };
+    let month: String = rfc3339_utc(month_start).chars().take(7).collect();
+    let spend_month: Vec<&&serde_json::Value> =
+        changes.iter().filter(|c| origin_of(c) == "SPEND" && ts_of(c).starts_with(&month)).collect();
+    let mut sorted = changes.clone();
+    sorted.sort_by_key(|c| ts_of(c));
+    let newest = sorted
+        .iter()
+        .rev()
+        .take(3)
+        .map(|c| format!("{} {:+.2} @ {}", origin_of(c), usd_of(c), ts_of(c)))
+        .collect::<Vec<_>>()
+        .join("; ");
+    format!(
+        "xai_api: balance — {} ledger entries, SPEND in {month}: {} entries ${:.2}; newest: {}",
+        changes.len(),
+        spend_month.len(),
+        spend_month.iter().map(|c| usd_of(c)).sum::<f64>(),
+        if newest.is_empty() { "none".to_string() } else { newest }
+    )
 }
 
 fn balance_window(usd: f64) -> LimitWindow {
@@ -518,6 +613,21 @@ pub fn snapshot_from(buckets: &[Bucket], budget: f64, month_next: u64, today: u6
         for w in &mut windows {
             w.used = 0.0;
         }
+    }
+    // The newest day with any spend, as its own row: a month figure that has stopped moving then
+    // says why at a glance (nothing charged since that day) instead of passing for a stuck reading.
+    // Sent as the bare UTC day, YYYY-MM-DD — the card writes it out in its own language.
+    if let Some(last) = buckets.iter().filter(|b| b.usd > 0.0).map(|b| b.start_secs).max() {
+        windows.push(LimitWindow {
+            id: "last_charge".into(),
+            label: "Last charge".into(),
+            used: 0.0,
+            resets_at: None,
+            count: None,
+            derived: false,
+            group: None,
+            text: Some(rfc3339_utc(last).chars().take(10).collect()),
+        });
     }
     // Per-model breakdown for the card, largest first
     let mut lines: Vec<(String, f64)> = Vec::new();
@@ -650,6 +760,41 @@ mod tests {
         assert!(take_refresh(Vendor::Anthropic));
         assert!(take_refresh(Vendor::OpenAi));
         assert!(!take_refresh(Vendor::Xai));
+    }
+
+    #[test]
+    fn xai_traces_summarise_the_reply() {
+        let v: serde_json::Value = serde_json::from_str(
+            r#"{"timeSeries":[{"group":["API grok-4.7"],"dataPoints":[{"timestamp":"2026-10-25T00:00:00Z","values":[1.5]},{"timestamp":"2026-10-26T00:00:00Z","values":[0]}]}],"limitReached":false}"#,
+        )
+        .unwrap();
+        let t = xai_usage_trace(&v, &parse_xai(&v));
+        assert!(t.contains("1 series, 2 points, limitReached=false"), "{t}");
+        assert!(t.contains("unparsed 0; last days with spend: 2026-10-25 $1.5000"), "{t}");
+        let b: serde_json::Value = serde_json::from_str(
+            r#"{"changes":[{"changeOrigin":"PURCHASE","amount":{"val":"-5000"},"createTs":"2026-10-03T10:00:00Z"},
+                           {"changeOrigin":"SPEND","amount":{"val":"420"},"createTs":"2026-10-26T01:00:00Z"}],"total":{"val":"-4580"}}"#,
+        )
+        .unwrap();
+        let t = xai_balance_trace(&b, parse_rfc3339_secs("2026-10-01T00:00:00Z").unwrap());
+        assert!(t.contains("2 ledger entries, SPEND in 2026-10: 1 entries $4.20"), "{t}");
+        assert!(t.contains("newest: SPEND +4.20 @ 2026-10-26T01:00:00Z; PURCHASE -50.00 @ 2026-10-03T10:00:00Z"), "{t}");
+    }
+
+    #[test]
+    fn the_last_day_with_spend_gets_its_own_row() {
+        let day = |s: &str| parse_rfc3339_secs(s).unwrap();
+        let b = vec![
+            Bucket { start_secs: day("2026-10-12T00:00:00Z"), usd: 8.09, lines: vec![] },
+            Bucket { start_secs: day("2026-10-14T00:00:00Z"), usd: 0.91, lines: vec![] },
+            Bucket { start_secs: day("2026-10-27T00:00:00Z"), usd: 0.0, lines: vec![] },
+        ];
+        let s = snapshot_from(&b, 20.0, 0, day("2026-10-27T00:00:00Z"));
+        assert_eq!(s.windows[0].id, "month", "the month stays first: ring and headline read windows[0]");
+        let last = s.windows.iter().find(|w| w.id == "last_charge").expect("a last-charge row");
+        assert_eq!(last.text.as_deref(), Some("2026-10-14"));
+        assert_eq!((last.used, last.resets_at), (0.0, None), "a plain figure: no bar, no reset");
+        assert!(snapshot_from(&[], 20.0, 0, 0).windows.iter().all(|w| w.id != "last_charge"), "no spend, no row");
     }
 
     #[test]

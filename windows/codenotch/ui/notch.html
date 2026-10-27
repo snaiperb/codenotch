@@ -658,7 +658,7 @@ const TEXT={
     'Working in':'Працює в'
   },
   ru:{
-    'of budget':'от бюджета','This month':'Этот месяц','Today':'Сегодня','Prepaid balance':'Баланс (предоплата)','Updated':'Обновлено',
+    'of budget':'от бюджета','This month':'Этот месяц','Today':'Сегодня','Prepaid balance':'Баланс (предоплата)','Last charge':'Последнее списание','Updated':'Обновлено',
     'Enter a valid Anthropic admin key in Settings → API spend.':'Введите действующий admin-ключ Anthropic в Настройки → API spend.',
     'Enter a valid OpenAI admin key in Settings → API spend.':'Введите действующий admin-ключ OpenAI в Настройки → API spend.',
     'Enter a valid xAI management key in Settings → API spend.':'Введите действующий management-ключ xAI в Настройки → API spend.',
@@ -1374,6 +1374,13 @@ function resetCopy(ms){
   if(diff<24*60*60*1000) return ui().resetsAt(t);
   return ui().resetsOn(d.toLocaleDateString(locale,{weekday:'short'}),t);
 }
+// A plain figure that is a day (a dollar cell's last charge comes as a bare UTC day, YYYY-MM-DD)
+// is written out in the card's language; any other figure, such as "$49.2", passes through
+function figureCopy(text){
+  const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(text||'');
+  if(!m) return text;
+  return new Date(Date.UTC(+m[1],+m[2]-1,+m[3])).toLocaleDateString(ui().locale,{month:'short',day:'numeric',timeZone:'UTC'});
+}
 // Calendar days rather than 24-hour blocks, so a clock change cannot move the answer
 function daysApart(from,to){
   const day=ms=>{const d=new Date(ms); return new Date(d.getFullYear(),d.getMonth(),d.getDate()).getTime();};
@@ -1448,7 +1455,7 @@ function renderCard(){
         continue;
       }
       if(w.text&&!w.resets_at&&!w.used){ // a plain figure such as a prepaid balance: no bar, no reset
-        html+=`<div class="win"><div class="w-row"><span class="w-label">${esc(textCopy(w.label))}</span><span class="w-reset">${esc(w.text)}</span></div></div>`;
+        html+=`<div class="win"><div class="w-row"><span class="w-label">${esc(textCopy(w.label))}</span><span class="w-reset">${esc(figureCopy(w.text))}</span></div></div>`;
         continue;
       }
       html+=`<div class="win">
