@@ -31,15 +31,29 @@ const POLL_SECS: u64 = 900;
 /// How long a reading counts as current before the cell dims it.
 const HTTP_TIMEOUT: Duration = Duration::from_secs(20);
 
-static REFRESH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// One flag per vendor, indexed by `Vendor as usize`: each poller consumes only its own, so one
+/// Refresh (tray, a click on a ring, saving Settings → API spend) wakes all three. A single shared
+/// flag was swapped back to false by whichever thread looked first, and the other two cells slept
+/// on for up to a quarter-hour.
+static REFRESH: [std::sync::atomic::AtomicBool; 3] = [
+    std::sync::atomic::AtomicBool::new(false),
+    std::sync::atomic::AtomicBool::new(false),
+    std::sync::atomic::AtomicBool::new(false),
+];
 
 pub fn request_refresh() {
-    REFRESH.store(true, std::sync::atomic::Ordering::Relaxed);
+    for flag in &REFRESH {
+        flag.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
-fn sleep_interruptible(total_secs: u64) {
+fn take_refresh(vendor: Vendor) -> bool {
+    REFRESH[vendor as usize].swap(false, std::sync::atomic::Ordering::Relaxed)
+}
+
+fn sleep_interruptible(vendor: Vendor, total_secs: u64) {
     for _ in 0..total_secs {
-        if REFRESH.swap(false, std::sync::atomic::Ordering::Relaxed) {
+        if take_refresh(vendor) {
             return;
         }
         std::thread::sleep(Duration::from_secs(1));
@@ -586,7 +600,7 @@ pub fn start(app: AppHandle, vendor: Vendor) {
             crate::applog(&format!("{}: {} — {}", vendor.id(), snap.status, snap.note));
         }
         broadcast(&app, vendor, snap);
-        sleep_interruptible(POLL_SECS);
+        sleep_interruptible(vendor, POLL_SECS);
     });
 }
 
@@ -627,6 +641,16 @@ pub fn probe(vendor: Vendor) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn one_refresh_wakes_every_vendor() {
+        request_refresh();
+        // each poller takes its own flag; none of them steals another's
+        assert!(take_refresh(Vendor::Xai));
+        assert!(take_refresh(Vendor::Anthropic));
+        assert!(take_refresh(Vendor::OpenAi));
+        assert!(!take_refresh(Vendor::Xai));
+    }
 
     #[test]
     fn xai_series_fold_into_daily_buckets() {
