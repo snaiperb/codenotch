@@ -558,6 +558,7 @@ fn xai_balance_trace(v: &serde_json::Value, month_start: u64) -> String {
 
 fn balance_window(usd: f64) -> LimitWindow {
     LimitWindow {
+        duration_ms: None, // a dollar month has no pace to fall behind
         id: "balance".into(),
         label: "Prepaid balance".into(),
         used: 0.0,
@@ -587,6 +588,7 @@ pub fn snapshot_from(buckets: &[Bucket], budget: f64, month_next: u64, today: u6
     let share = |usd: f64| if budget > 0.0 { (usd / budget).max(0.0) } else { 0.0 };
     let mut windows = vec![
         LimitWindow {
+            duration_ms: None, // a dollar month has no pace to fall behind
             id: "month".into(),
             label: if budget > 0.0 { format!("This month · budget {}", fmt_usd(budget)) } else { "This month".into() },
             used: share(month),
@@ -597,6 +599,7 @@ pub fn snapshot_from(buckets: &[Bucket], budget: f64, month_next: u64, today: u6
             text: Some(fmt_usd(month)),
         },
         LimitWindow {
+            duration_ms: None, // a dollar month has no pace to fall behind
             id: "today".into(),
             label: "Today".into(),
             used: share(today_usd),
@@ -619,6 +622,7 @@ pub fn snapshot_from(buckets: &[Bucket], budget: f64, month_next: u64, today: u6
     // Sent as the bare UTC day, YYYY-MM-DD — the card writes it out in its own language.
     if let Some(last) = buckets.iter().filter(|b| b.usd > 0.0).map(|b| b.start_secs).max() {
         windows.push(LimitWindow {
+            duration_ms: None, // a dollar month has no pace to fall behind
             id: "last_charge".into(),
             label: "Last charge".into(),
             used: 0.0,
@@ -647,7 +651,7 @@ pub fn snapshot_from(buckets: &[Bucket], budget: f64, month_next: u64, today: u6
         .map(|(n, usd)| format!("{n} {}", fmt_usd(*usd)))
         .collect::<Vec<_>>()
         .join(" · ");
-    UsageSnapshot { status: "ok".into(), windows, fetched_at: now_ms(), note, backoff_until: 0 }
+    UsageSnapshot { status: "ok".into(), windows, fetched_at: now_ms(), note, backoff_until: 0, ..Default::default() }
 }
 
 fn read_once(app: &AppHandle, vendor: Vendor, prev: &UsageSnapshot) -> UsageSnapshot {
