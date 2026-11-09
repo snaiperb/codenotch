@@ -342,7 +342,7 @@ final class UsageStore: ObservableObject {
         wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshNow(freshness: .live) }
+            MainActor.assumeIsolated { _ = self?.refreshNow(freshness: .live) }
         }
 
         // A window's `label` is display text a provider resolved while it was
@@ -354,7 +354,7 @@ final class UsageStore: ObservableObject {
         languageObserver = NotificationCenter.default.addObserver(
             forName: L10n.didChange, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.refreshNow() }
+            MainActor.assumeIsolated { _ = self?.refreshNow() }
         }
     }
 
@@ -445,7 +445,14 @@ final class UsageStore: ObservableObject {
         sinceLastRefresh >= spacing
     }
 
-    func refreshNow() {
+    /// Starts a pass over every provider, or joins the one already running.
+    ///
+    /// Returns that pass for a caller that has to say when it is over — the
+    /// menu's "Refresh all" reads "Refreshing…" until then. A pass wedged
+    /// behind a keychain prompt can outlive `refreshDeadline`, so a caller
+    /// waiting on it needs a way to stop waiting of its own.
+    @discardableResult
+    func refreshNow() -> Task<Void, Never>? {
         refreshNow(freshness: freshnessWanted)
     }
 
@@ -460,18 +467,21 @@ final class UsageStore: ObservableObject {
     /// - Parameter includeIdleSkipped: false leaves manual-only providers out:
     ///   their fetch is expensive enough to spend only on a look, a rollover,
     ///   or a click — not on every idle tick.
-    func refreshNow(freshness: UsageFreshness, includeIdleSkipped: Bool = true) {
+    @discardableResult
+    func refreshNow(freshness: UsageFreshness, includeIdleSkipped: Bool = true) -> Task<Void, Never>? {
         guard !isRefreshing else {
             Log.usage.notice("refresh skipped: one already in flight")
-            return
+            return refreshTask
         }
         isRefreshing = true
         lastAttempt = pollingNow()
-        refreshTask = Task { [weak self] in
+        let pass = Task { [weak self] in
             await self?.refresh(freshness: freshness, includeIdleSkipped: includeIdleSkipped)
             self?.finish()
         }
+        refreshTask = pass
         armDeadline()
+        return pass
     }
 
     /// A provider's work has just stopped, so its number has just finished
@@ -900,6 +910,31 @@ final class UsageStore: ObservableObject {
         let age = Date().timeIntervalSince(previous.fetchedAt)
         var snapshot = previous.snapshot
         snapshot.status = age > staleAfter ? .stale(since: previous.fetchedAt) : previous.snapshot.status
+        // A quota that is effectively exhausted (about 1% left or less) and is
+        // now being rejected has, in practice, hit zero: the last successful
+        // poll simply never reached 100%. Reflect that rather than leaving a
+        // stuck 1% on screen. Muse is the case that trips this, but the rule
+        // is general — a 429 at ~1% remaining means there is nothing left.
+        if case UsageProviderError.rateLimited = error,
+           let used = snapshot.headline?.usedFraction, used >= 0.99 {
+            if let headlineID = snapshot.headlineID,
+               let idx = snapshot.windows.firstIndex(where: { $0.id == headlineID }) {
+                let w = snapshot.windows[idx]
+                snapshot.windows[idx] = LimitWindow(id: w.id, group: w.group, label: w.label,
+                    usedFraction: 1, remaining: w.remaining, used: w.used, usedText: w.usedText,
+                    detail: w.detail, money: w.money, resetsAt: w.resetsAt, duration: w.duration,
+                    bandOverride: w.bandOverride, prefersUsedText: w.prefersUsedText)
+            }
+            if let weeklyID = snapshot.weeklyID, weeklyID != snapshot.headlineID,
+               let idx = snapshot.windows.firstIndex(where: { $0.id == weeklyID }),
+               let used = snapshot.windows[idx].usedFraction, used >= 0.99 {
+                let w = snapshot.windows[idx]
+                snapshot.windows[idx] = LimitWindow(id: w.id, group: w.group, label: w.label,
+                    usedFraction: 1, remaining: w.remaining, used: w.used, usedText: w.usedText,
+                    detail: w.detail, money: w.money, resetsAt: w.resetsAt, duration: w.duration,
+                    bandOverride: w.bandOverride, prefersUsedText: w.prefersUsedText)
+            }
+        }
         return snapshot
     }
 

@@ -81,6 +81,7 @@ pub fn run() -> String {
     o += &format!("  {}\n", crate::copilot::probe());
     o += &format!("  {}\n", crate::glm::probe());
     o += &format!("  {}\n", crate::opencode::probe());
+    o += &format!("  {}\n", crate::qoder::probe());
     o += &format!("  {}\n", crate::antigravity::probe());
     o += &format!("  {}\n", crate::apicost::probe(crate::apicost::Vendor::Anthropic));
     o += &format!("  {}\n", crate::apicost::probe(crate::apicost::Vendor::OpenAi));

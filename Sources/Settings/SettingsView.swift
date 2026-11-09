@@ -766,8 +766,11 @@ struct SettingsView: View {
             // so dragging it was arranging something that is not on screen.
             Section(L10n.t("Connected")) {
                 if needsSetup { setupNote }
-                Toggle(L10n.t("Auto-order based on remaining usage"), isOn: $preferences.autoOrderByRemaining)
-                Text(L10n.t("The notch sorts rings by what is left of the window that leads each ring, most first. A high number that cannot be spent yet sinks below usable accounts but stays above empty ones. This list keeps your manual order, which breaks ties."))
+                Picker(L10n.t("Order rings"), selection: $preferences.ringOrder) {
+                    ForEach(RingOrder.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                Text(preferences.ringOrder.explanation)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -789,9 +792,7 @@ struct SettingsView: View {
                         .foregroundStyle(.tertiary)
                         .fixedSize(horizontal: false, vertical: true)
                 } else if !connected.isEmpty {
-                    Text(preferences.autoOrderByRemaining
-                         ? L10n.t("Auto-order is on: the notch sorts these by remaining usage. Dragging still sets the order ties break in.")
-                         : L10n.t("The notch draws these in this order. Drag one by its handle to move it."))
+                    Text(listOrderFooter)
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -827,6 +828,20 @@ struct SettingsView: View {
                         .foregroundStyle(.tertiary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+            }
+
+            Section(L10n.t("Plan ceilings")) {
+                Picker(L10n.t("Ceiling calculation"), selection: $preferences.planCeilingMode) {
+                    ForEach(PlanCeilingMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Text(preferences.planCeilingMode.explanation)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .formStyle(.grouped)
@@ -901,7 +916,7 @@ struct SettingsView: View {
 
                 Toggle(L10n.t("Show remaining instead of used"),
                        isOn: $preferences.showsRemainingInNotch)
-                Text(L10n.t("The notch reads what is left — the figures, the rings' sweep, and the card's bars and percentages. Colours still judge by what is spent, so a nearly empty ring still reads red."))
+                Text(L10n.t("The notch and the menu bar read what is left — the figures, the rings' sweep, and the card's bars and percentages. Colours still judge by what is spent, so a nearly empty ring still reads red."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -915,7 +930,7 @@ struct SettingsView: View {
 
                 Toggle(L10n.t("Hide accounts with nothing left to spend"),
                        isOn: $preferences.hideDepletedAccounts)
-                Text(L10n.t("When the 5-hour or the weekly window is at 0% remaining, the account leaves the notch until a window resets. Stale readings stay: an old number is not proof the account is empty."))
+                Text(L10n.t("When the 5-hour or the weekly window is at 0% remaining, the account leaves the notch and the menu bar until a window resets — the menu behind the menu bar item still lists it. Stale readings stay: an old number is not proof the account is empty."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -947,8 +962,12 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                Toggle(L10n.t("Fold for full-screen apps"), isOn: $preferences.foldsForFullScreen)
-                Text(L10n.t("The notch folds away while a full-screen app is frontmost, and returns when you leave it. Off keeps it in place over full-screen apps."))
+                Picker(L10n.t("Auto-hide"), selection: $preferences.autoHideMode) {
+                    ForEach(AutoHideMode.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented)
+
+                Text(preferences.autoHideMode.explanation)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1101,6 +1120,14 @@ struct SettingsView: View {
                 }
             }
 
+            // Its own group, next to the notch's, because it is the other
+            // surface Codenotch puts readings on. Under "App" these rows read
+            // as chrome for the app itself — a sub-question of which icon to
+            // show — rather than as the second place the limits appear.
+            Section(L10n.t("Menu bar")) {
+                menuBarRows
+            }
+
             Section(L10n.t("Usage Limits")) {
                 VStack(alignment: .leading, spacing: 4) {
                     Picker(L10n.t("Colour transition"), selection: $preferences.colorTransitionStyle) {
@@ -1181,14 +1208,6 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
 
-                // Only while there is a menu bar item for it to change. With
-                // the app in the Dock or nowhere, a switch here would do
-                // nothing anyone could see; the choice is kept for when the
-                // item comes back.
-                if preferences.appPresence == .menuBar {
-                    menuBarLimitRows
-                }
-
                 Picker(L10n.t("Language"), selection: $preferences.language) {
                     ForEach(AppLanguage.allCases) { Text($0.title).tag($0) }
                 }
@@ -1201,6 +1220,34 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
+    }
+
+    /// The Menu bar group's contents: the limit rows while there is an item
+    /// to put them in, and the way back to one while there is not.
+    ///
+    /// The group keeps its heading either way. Emptying it out would take the
+    /// feature's only signpost away from exactly the people who have not
+    /// found it yet, and a heading with nothing under it reads as a fault.
+    @ViewBuilder
+    private var menuBarRows: some View {
+        if preferences.appPresence == .menuBar {
+            menuBarLimitRows
+        } else {
+            // What was chosen is still there, only with nothing to show it
+            // in. Said here, with the way back beside it, rather than left
+            // for someone to work out that App icon further down decides it.
+            HStack {
+                Text(L10n.t("Codenotch has no menu bar item at the moment, so there is nothing here to change. What is chosen is kept for when the item comes back."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                Button(L10n.t("Show in menu bar")) {
+                    preferences.appPresence = .menuBar
+                }
+                .buttonStyle(SettingsButtonStyle(kind: .prominent))
+            }
+        }
     }
 
     /// Limits in the menu bar: the switch, and under it one row for each
@@ -1220,6 +1267,45 @@ struct SettingsView: View {
             Toggle(L10n.t("Show weekly limit in menu bar"),
                    isOn: $preferences.showsWeeklyLimitInMenuBar)
             Text(L10n.t("Adds a compact weekly-usage ring around each chosen provider that publishes it."))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            // Before the two that are about what the item looks like: this
+            // one is about what it is for.
+            Picker(L10n.t("A click on the item"), selection: $preferences.menuBarClickAction) {
+                ForEach(MenuBarClickAction.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+
+            Text(preferences.menuBarClickAction.explanation)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            // Above the provider rows, because it decides what each of them
+            // costs in width — and width is what anyone ticking a fourth
+            // provider is actually spending.
+            Picker(L10n.t("Each reading shows"), selection: $preferences.menuBarReading) {
+                ForEach(MenuBarReading.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+
+            Text(preferences.menuBarReading.explanation)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            // The notch's own question, asked again here because the answers
+            // are not the same ones: the bar has no ring for an arc to turn
+            // inside, and movement a few pixels from the clock is read
+            // differently from movement on the screen edge.
+            Picker(L10n.t("Working indicator"), selection: $preferences.menuBarActivityStyle) {
+                ForEach(MenuBarActivityStyle.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+
+            Text(preferences.menuBarActivityStyle.explanation)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1249,11 +1335,13 @@ struct SettingsView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            // Said only once it applies: past two the item keeps each share
-            // and drops the countdowns, and past four it stops, because macOS
-            // hides a status item that does not fit rather than squeezing it.
-            if menuBarChoices.filter({ preferences.isInMenuBar($0.id) }).count > StatusItemSummary.fullEntryLimit {
-                Text(L10n.t("Past two, each shows its share alone and the countdowns move to the tooltip. Past four, the rest are in the menu."))
+            // The one ceiling the picker above cannot move, said only once it
+            // is reached. What the four on show print is that picker's
+            // business; a fifth reading has nowhere to go but the menu,
+            // because macOS hides a status item that does not fit rather than
+            // squeezing it.
+            if menuBarChoices.filter({ preferences.isInMenuBar($0.id) }).count > StatusItemSummary.entryLimit {
+                Text(L10n.t("Past four, the rest are in the menu: macOS hides a menu bar item that does not fit rather than squeezing it."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1382,7 +1470,15 @@ struct SettingsView: View {
             // about notifications in general — but the mechanism it silences
             // belongs to this pane's subject.
             Section(L10n.t("Threshold alerts")) {
-                Text(L10n.t("A system notification the moment a provider's headline limit crosses 80%, and again at 100% — once per crossing, and again only after the window rolls over. Mute one from the bell beside its row in Accounts."))
+                Picker(L10n.t("Warning threshold"), selection: $preferences.ceilingWarningThreshold) {
+                    Text("75%").tag(75)
+                    Text("80%").tag(80)
+                    Text("85%").tag(85)
+                    Text("90%").tag(90)
+                }
+                .pickerStyle(.segmented)
+
+                Text(L10n.t("A system notification the moment a provider's headline limit crosses the warning threshold, and again at 100% — once per crossing, and again only after the window rolls over. Mute one from the bell beside its row in Accounts."))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1567,12 +1663,25 @@ struct SettingsView: View {
         return !usageAccounts.isEmpty && usageAccounts.allSatisfy { $0.account == nil }
     }
 
+    /// What the list footer says about ordering: the picker above names the
+    /// sort, so this only says what dragging still does under it.
+    private var listOrderFooter: String {
+        switch preferences.ringOrder.canonical {
+        case .manual:
+            return L10n.t("The notch draws these in this order. Drag one by its handle to move it.")
+        case .remaining, .deficit, .expiring:
+            return L10n.t("Auto-order is on: dragging still sets the order ties break in.")
+        default:
+            return L10n.t("Auto-order is on: dragging still sets the order ties break in.")
+        }
+    }
+
     /// Names the tools rather than saying "tools already signed in on this
     /// Mac". Someone who uses Claude in a browser reads that sentence, installs
     /// this, sees four blank rings and concludes it is broken — and the
     /// distinction that catches them out is Claude *Code*, not the Claude app.
     static var setupCopy: String {
-        L10n.t("Codenotch reads usage from tools already signed in on this Mac — it never asks for your password. Install and sign in to any of Claude Code (the terminal tool, not the Claude app), Cursor (the editor or cursor-agent), Codex, Antigravity, GLM, Grok, OpenCode, Command Code, GitHub Copilot, Kimi Code, Kiro, Amp, Apify, the Kilo CLI, Muse or a Gemini API key (via Gemini CLI, OpenCode or Hermes), and its ring appears in the notch.")
+        L10n.t("Codenotch reads usage from tools already signed in on this Mac — it never asks for your password. Install and sign in to any of Claude Code (the terminal tool, not the Claude app), Cursor (the editor or cursor-agent), Codex, Antigravity, GLM, Grok, OpenCode, Command Code, GitHub Copilot, Kimi Code, Kiro, Amp, Apify, the Kilo CLI, Muse, Higgsfield, Krea or a Gemini API key (via Gemini CLI, OpenCode or Hermes), and its ring appears in the notch.")
     }
 
     /// Said before it happens rather than after. A system dialogue asking to
@@ -2115,28 +2224,49 @@ private struct AccountRow: View {
                 }
             }
 
-            // Google publishes no limit for a bare API key, so the ring has
-            // nothing to fill against until the user names a ceiling itself.
+            // Google publishes no limit for a bare API key, so the ring fills
+            // against a user-configured ceiling or one inferred from peak usage.
             if isConnected, provider.id == "gemini-api" {
-                // The field's own title would be drawn as a leading label
-                // inside a `Form` row, which puts the caption hard against
-                // the box and leaves the unit stranded past it. Hidden, so
-                // the caption above can own the naming and the row can
-                // breathe.
+                let peak = preferences.observedPeakUsage[provider.id] ?? 0
+                let inferred = peak > 0 ? PlanCeiling.infer(from: peak) : nil
                 VStack(alignment: .leading, spacing: 4) {
                     Text(L10n.t("Monthly budget"))
                     HStack(spacing: 8) {
-                        TextField(L10n.t("None"), value: $preferences.geminiAPIMonthlyTokenBudget,
+                        TextField(inferred.map { "Auto (~\(PlanCeiling.compact($0)))" } ?? L10n.t("None"),
+                                  value: $preferences.geminiAPIMonthlyTokenBudget,
                                   format: .number)
                             .textFieldStyle(.roundedBorder)
                             .labelsHidden()
-                            .frame(width: 130)
+                            .frame(width: 140)
                         Text(L10n.t("tokens"))
+                        if preferences.geminiAPIMonthlyTokenBudget != nil {
+                            Button(L10n.t("Auto")) {
+                                preferences.geminiAPIMonthlyTokenBudget = nil
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.caption)
+                            .help(L10n.t("Revert to auto-inferred ceiling based on peak usage."))
+                        }
+                    }
+                    if peak > 0 {
+                        HStack(spacing: 4) {
+                            Text(L10n.t("Observed peak: \(PlanCeiling.compact(peak)) tokens"))
+                            if let inferred {
+                                Text("· \(L10n.t("Inferred: ~\(PlanCeiling.compact(inferred))"))")
+                            }
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
                     }
                 }
                 .padding(.top, 2)
                 .foregroundStyle(.secondary)
-                .help(L10n.t("Fills the ring against a ceiling you choose; Google publishes none for an API key."))
+                .help(L10n.t("Fills the ring against a ceiling you choose or inferred from peak usage; Google publishes none for an API key."))
+            }
+
+            // Manual provider: user-declared limits and reset schedule.
+            if isConnected, provider.id == "manual" {
+                manualProviderSettings
             }
             // Ollama owns its credential: the user enters an API key here, stored
             // in the keychain. The env var OLLAMA_API_KEY is checked first, so a
@@ -2172,6 +2302,59 @@ private struct AccountRow: View {
             // Save, the same way Ollama's is.
             if provider.id == "apify" {
                 apifyTokenEntry
+            }
+            if provider.id == "higgsfield" {
+                higgsfieldKeyEntry
+            }
+            if provider.id == "krea" {
+                kreaKeyEntry
+            }
+        }
+    }
+
+    private var manualProviderSettings: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(L10n.t("Request limit"))
+                HStack(spacing: 8) {
+                    TextField(L10n.t("None"), value: $preferences.manualProviderLimit, format: .number)
+                        .textFieldStyle(.roundedBorder)
+                        .labelsHidden()
+                        .frame(width: 130)
+                    Text(L10n.t("requests"))
+                }
+                if let peak = preferences.observedPeakUsage["manual"], peak > 0 {
+                    let inferred = PlanCeiling.infer(from: peak)
+                    HStack(spacing: 4) {
+                        Text(L10n.t("Observed peak: \(peak) requests"))
+                        Text("· \(L10n.t("Inferred: ~\(inferred)"))")
+                    }
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                }
+            }
+            .padding(.top, 2)
+            .foregroundStyle(.secondary)
+            .help(L10n.t("Fills the ring against a declared ceiling you choose."))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(L10n.t("Reset window"))
+                Picker(L10n.t("Reset window"), selection: $preferences.manualProviderSchedule) {
+                    ForEach(ManualResetSchedule.standardOptions, id: \.identifier) { option in
+                        Text(option.displayName).tag(option.identifier)
+                    }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .frame(width: 180)
+            }
+            .foregroundStyle(.secondary)
+            .help(L10n.t("How often the manual quota window rolls over."))
+            .onChange(of: preferences.manualProviderSchedule) { _ in
+                refresh(provider.id)
+            }
+            .onChange(of: preferences.manualProviderLimit) { _ in
+                refresh(provider.id)
             }
         }
     }
@@ -2245,6 +2428,76 @@ private struct AccountRow: View {
                 }
             }
             Text(L10n.t("Paste a token from Apify Console › Settings › API & Integrations. Not needed after apify login, or with APIFY_TOKEN exported. Stored in your login keychain."))
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, 2)
+    }
+
+    /// The API key input for Higgsfield. Stored in the keychain on Save, then a
+    /// refresh is triggered so the ring picks up the new credential without a relaunch.
+    @State private var higgsfieldKey = ""
+    @State private var higgsfieldKeySaved = false
+
+    private var higgsfieldKeyEntry: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(L10n.t("Higgsfield API key"))
+                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                SecureField(L10n.t("Paste your key"), text: $higgsfieldKey)
+                    .textContentType(.password)
+                    .textFieldStyle(.roundedBorder)
+                    .labelsHidden()
+                    .frame(maxWidth: 260)
+                Button(L10n.t("Save")) {
+                    guard !higgsfieldKey.isEmpty else { return }
+                    HiggsfieldCredentials.store(higgsfieldKey)
+                    higgsfieldKey = ""
+                    higgsfieldKeySaved = true
+                    _ = signIn(provider.id)
+                }
+                .disabled(higgsfieldKey.isEmpty)
+                if higgsfieldKeySaved {
+                    Text(L10n.t("Saved"))
+                        .foregroundStyle(.green)
+                }
+            }
+            Text(L10n.t("Paste an API key or token from Higgsfield Console. Not needed after hf auth login, or with HIGGSFIELD_API_KEY exported. Stored in your login keychain."))
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, 2)
+    }
+
+    /// The API key input for Krea. Stored in the keychain on Save, then a
+    /// refresh is triggered so the ring picks up the new credential without a relaunch.
+    @State private var kreaKey = ""
+    @State private var kreaKeySaved = false
+
+    private var kreaKeyEntry: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(L10n.t("Krea API key"))
+                .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                SecureField(L10n.t("Paste your key"), text: $kreaKey)
+                    .textContentType(.password)
+                    .textFieldStyle(.roundedBorder)
+                    .labelsHidden()
+                    .frame(maxWidth: 260)
+                Button(L10n.t("Save")) {
+                    guard !kreaKey.isEmpty else { return }
+                    KreaCredentials.store(kreaKey)
+                    kreaKey = ""
+                    kreaKeySaved = true
+                    _ = signIn(provider.id)
+                }
+                .disabled(kreaKey.isEmpty)
+                if kreaKeySaved {
+                    Text(L10n.t("Saved"))
+                        .foregroundStyle(.green)
+                }
+            }
+            Text(L10n.t("Paste an API token from Krea › Settings › API Tokens. Not needed after krea auth login, or with KREA_API_KEY exported. Stored in your login keychain."))
                 .foregroundStyle(.tertiary)
                 .fixedSize(horizontal: false, vertical: true)
         }

@@ -116,7 +116,10 @@
   .arc-spin{animation:spin 1.2s steps(12) infinite;transform-origin:center}
   .arc-pulse{animation:pulse 1.1s steps(6) infinite}
   /* Windows' Animation effects switch: a still arc and a solid ring, as on the Mac under Reduce Motion */
-  @media (prefers-reduced-motion: reduce){.arc-spin,.arc-pulse{animation:none}.ringwrap{transition:none}}
+  /* The Mac's NotchMotion.glide: an open card travels to the next cell as one object, its tail with it,
+     instead of jumping there. Only between cells; a card that opens appears where it belongs. */
+  #card.gliding,#tail.gliding{transition:top .3s cubic-bezier(.33,1,.68,1),left .3s cubic-bezier(.33,1,.68,1)}
+  @media (prefers-reduced-motion: reduce){.arc-spin,.arc-pulse{animation:none}.ringwrap{transition:none}#card.gliding,#tail.gliding{transition:none}}
 
   /* Hover card, shown to the left of the pill */
   #card{
@@ -143,6 +146,8 @@
   .c-head{display:flex;align-items:center;gap:8px;margin-bottom:4px}
   .c-title{font-size:14px;font-weight:700}
   .c-sub{font-size:11px;color:var(--ink-dim);margin-bottom:10px}
+  .c-account{overflow-wrap:anywhere}
+  .c-account + .c-sub{margin-top:-6px}
   .win{margin-top:10px}
   .w-row{display:flex;justify-content:space-between;align-items:baseline;font-size:12px;flex-wrap:wrap;column-gap:8px}
   .w-label{color:var(--ink-2);font-weight:600;min-width:0;overflow-wrap:break-word} /* a long label wraps instead of running off the card */
@@ -202,6 +207,15 @@
   body[data-edge="top"] #tail,body[data-edge="bottom"] #tail{right:auto;width:32.7px;height:28.2px}
   body[data-edge="top"] #tail{clip-path:path('M0 28.2C8.18 28.2 12.43 11.84 16.36 0C20.29 11.84 24.54 28.2 32.72 28.2Z')}
   body[data-edge="bottom"] #tail{clip-path:path('M0 0C8.18 0 12.43 16.36 16.36 28.2C20.29 16.36 24.54 0 32.72 0Z')}
+  /* The taskbar's hover card (CARD_ONLY): the card alone, with the bottom edge's tail under it
+     pointing down at the ring; turned over when the taskbar is at the top. Both are pinned to the
+     strip's side of the window, so the card grows away from the taskbar as the window does. */
+  html.card-only #root > :not(#card):not(#tail){display:none!important}
+  html.card-only #card{display:block;left:0;right:auto;transform:none;margin:0;width:100%;max-width:none;max-height:none;overflow:visible}
+  html.card-only #tail{display:block;right:auto;width:32.7px;height:28.2px;clip-path:path('M0 0C8.18 0 12.43 16.36 16.36 28.2C20.29 16.36 24.54 0 32.72 0Z')}
+  /* The tail moves with the card between rings, on the curve Rust moves the window on (GLIDE_MS) */
+  html.card-only #tail{transition:left .3s cubic-bezier(.33,1,.68,1)}
+  html.card-only.below #tail{clip-path:path('M0 28.2C8.18 28.2 12.43 11.84 16.36 0C20.29 11.84 24.54 28.2 32.72 28.2Z')}
 
   /* Show on hover, the Mac's .onHover: folded, the notch rests as a small pill at the edge. Its size is
      the Mac's NotchLayout.pillWidth × pillHeight, 26 × 210 of its design px — 10 × 79 of this page's,
@@ -213,6 +227,19 @@
     --clip-rest:inset(calc(50% - 39.5px) 0 calc(50% - 39.5px) calc(100% - 10px) round 6px 0 0 6px);
     clip-path:var(--clip-open);transition:clip-path .36s cubic-bezier(.32,.72,.24,1)}
   body.folded #pill{clip-path:var(--clip-rest)}
+  /* WebKitGTK paints the overflowing gradient fillets separately from the
+     clipped pill. A single vector outline keeps all corners in the same frame. */
+  body.linux-vector #pill{background:transparent;border-color:transparent}
+  body.linux-vector #pill::before,body.linux-vector #pill::after{display:none}
+  #pillContour{position:absolute;pointer-events:none;overflow:visible;
+    transform-origin:100% 50%;transition:transform .36s cubic-bezier(.32,.72,.24,1),opacity .18s ease}
+  #pillContour path{fill:var(--pill);stroke:var(--edge);stroke-width:1}
+  body.folded #pillContour{transform:scale(.14,.2);opacity:0}
+  body[data-edge="left"] #pillContour{transform-origin:0 50%}
+  body[data-edge="top"] #pillContour{transform-origin:50% 0}
+  body[data-edge="bottom"] #pillContour{transform-origin:50% 100%}
+  body.folded[data-edge="top"] #pillContour,body.folded[data-edge="bottom"] #pillContour{transform:scale(.2,.14)}
+  @media(prefers-reduced-motion:reduce){#pillContour{transition:none}}
   body[data-edge="left"] #pill{--clip-rest:inset(calc(50% - 39.5px) calc(100% - 10px) calc(50% - 39.5px) 0 round 0 6px 6px 0)}
   body[data-edge="top"] #pill,body[data-edge="bottom"] #pill{--clip-open:inset(-1px -40px -1px -40px round 0)}
   body[data-edge="top"] #pill{--clip-rest:inset(0 calc(50% - 39.5px) calc(100% - 10px) calc(50% - 39.5px) round 0 0 6px 6px)}
@@ -347,6 +374,33 @@
 <script>
 const invoke = window.__TAURI__.core.invoke;
 const listen = window.__TAURI__.event.listen;
+// The taskbar's hover card is this page showing only its card, so the two cards are one design. The
+// strip stands in for the pill: in this mode nothing measures, folds or reports the notch's window.
+const CARD_ONLY=window.__CODENOTCH_TASKBAR_HOVER__===true;
+if(CARD_ONLY) document.documentElement.classList.add('card-only');
+const isLinux=/Linux/.test(navigator.platform);
+document.body.classList.toggle('linux-vector',isLinux);
+let pillContour=null, contourPath=null;
+function paintPillContour(){
+  if(!isLinux)return;
+  if(!pillContour){
+    pillContour=document.createElementNS('http://www.w3.org/2000/svg','svg');
+    pillContour.id='pillContour';pillContour.setAttribute('aria-hidden','true');
+    contourPath=document.createElementNS(pillContour.namespaceURI,'path');
+    pillContour.appendChild(contourPath);
+    const root=document.getElementById('root');root.insertBefore(pillContour,root.firstChild);
+  }
+  const r=pill.getBoundingClientRect(),vertical=edgeIsVertical();
+  const z=parseFloat(document.documentElement.style.zoom)||1;
+  const F=(parseFloat(getComputedStyle(pill).getPropertyValue('--fillet'))||38.7)*z;
+  const W=vertical?r.width:r.height,H=vertical?r.height:r.width,R=Math.min(20*z,W/2,H/2);
+  if(!W||!H)return;
+  const width=vertical?W:H+2*F,height=vertical?H+2*F:W;
+  pillContour.setAttribute('viewBox',`0 0 ${width} ${height}`);
+  Object.assign(pillContour.style,{left:`${(r.left-(vertical?0:F))/z}px`,top:`${(r.top-(vertical?F:0))/z}px`,width:`${width/z}px`,height:`${height/z}px`});
+  contourPath.setAttribute('d',`M${W} 0 A${F} ${F} 0 0 1 ${W-F} ${F} H${R} Q0 ${F} 0 ${F+R} V${F+H-R} Q0 ${F+H} ${R} ${F+H} H${W-F} A${F} ${F} 0 0 1 ${W} ${H+2*F} Z`);
+  contourPath.setAttribute('transform',notchEdge==='left'?`matrix(-1 0 0 1 ${W} 0)`:notchEdge==='top'?`matrix(0 -1 1 0 0 ${W})`:notchEdge==='bottom'?'matrix(0 1 1 0 0 0)':'matrix(1 0 0 1 0 0)');
+}
 
 /* Colour ramp (upstream palette values) */
 let AMPLE='#00FF88', WATCH='#F2FF00', CRIT='#FF3F00';
@@ -411,6 +465,17 @@ function leftPctText(f){
 // they draw, so an overspent limit reads empty rather than negative. As the Mac's Percent.metered
 // does. Colours never come through here: how bad a reading is stays a question about what was spent.
 function meteredFraction(f,showRemaining){ return showRemaining?1-f:f; }
+// Used quota ahead of elapsed time, as the Mac's UsagePace; reserves stay hidden.
+function deficitOf(w){
+  const now=Date.now();
+  if(!showPace) return null; // the Mac's usage pace setting, off by default there too
+  if(w.count!=null || !Number.isFinite(w.used) || w.used<0 || !Number.isFinite(w.duration_ms) || !(w.duration_ms>0) || !Number.isFinite(w.resets_at) || !(w.resets_at>now)) return null;
+  const elapsed=1-Math.min((w.resets_at-now)/w.duration_ms,1);
+  const points=(Math.min(w.used,1)-elapsed)*100;
+  if(!(points>0)) return null;
+  const r=Math.round(points*10)/10;
+  return r===0?'<0.1':r.toFixed(1).replace(/\.0$/,'');
+}
 // Both halves as text, the '~' staying on the used half it qualifies. Shared so the card line and
 // the tests below read the same computation.
 function usedHalves(f,derived){
@@ -425,7 +490,8 @@ function usedHalves(f,derived){
 // The line keeps both ends either way — the card is the detailed view — but the remaining figure leads when set.
 function usedCopy(w){
   const [u,l]=usedHalves(w.used,w.derived);
-  return showRemaining?ui().leftUsed(l,u):ui().usedLeft(u,l);
+  const d=deficitOf(w);
+  return (showRemaining?ui().leftUsed(l,u):ui().usedLeft(u,l))+(d!=null?' · '+ui().deficit(d):'');
 }
 // HEADLINE_PCT_END
 
@@ -437,8 +503,12 @@ let grokSnap={status:'absent',windows:[],fetched_at:0,note:''};
 // GitHub Copilot quotas, from the GitHub CLI's own session; absent until gh is installed or a token is set
 let copilotSnap={status:'absent',windows:[],fetched_at:0,note:''};
 let glmSnap={status:'absent',windows:[],fetched_at:0,note:''};
+// DeepSeek Harness: derived from ~/.dsh session transcripts (cost vs a daily budget)
+let deepseekSnap={status:'absent',windows:[],fetched_at:0,note:''};
 // OpenCode Go plan, read with OpenCode's own sign-in; absent until OpenCode is installed
 let opencodeSnap={status:'absent',windows:[],fetched_at:0,note:''};
+let commandcodeSnap={status:'absent',windows:[],fetched_at:0,note:''};
+let qoderSnap={status:'absent',windows:[],fetched_at:0,note:''};
 let agSnap={status:'absent',windows:[],fetched_at:0,note:''};
 let anthApiSnap={status:'absent',windows:[],fetched_at:0,note:''};
 let oaiApiSnap={status:'absent',windows:[],fetched_at:0,note:''};
@@ -464,6 +534,7 @@ listen('notch_insets',e=>applyInsets(e.payload)).catch(()=>{});
 invoke('get_notch_insets').then(applyInsets).catch(()=>{});
 function edgeIsVertical(){ return notchEdge==='left'||notchEdge==='right'; }
 function applyEdge(e){
+  if(CARD_ONLY) return;
   const next=(e==='left'||e==='top'||e==='bottom')?e:'right';
   if(next===notchEdge) return;
   notchEdge=next;
@@ -518,6 +589,7 @@ const TEXT={
     'Sign in to Cursor to see usage.':'사용량을 확인하려면 Cursor에 로그인하십시오.',
     'Sign in to Codex to see usage.':'사용량을 확인하려면 Codex에 로그인하십시오.',
     'Sign in to Antigravity to see usage.':'사용량을 확인하려면 Antigravity에 로그인하십시오.',
+    'Sign in to qodercli to see usage.':'사용량을 확인하려면 qodercli에 로그인하십시오.',
     'needs your input':'응답을 기다리는 중',
     'Working in':'작업 위치:',
     'Sign in':'로그인',
@@ -588,6 +660,7 @@ const TEXT={
     'Sign in to Cursor to see usage.':'Entre no Cursor para ver o uso.',
     'Sign in to Codex to see usage.':'Entre no Codex para ver o uso.',
     'Sign in to Antigravity to see usage.':'Entre no Antigravity para ver o uso.',
+    'Sign in to qodercli to see usage.':'Entre no qodercli para ver o uso.',
     'Run grok login to see usage.':'Execute grok login para ver o uso.',
     'Run gh auth login to see usage.':'Execute gh auth login para ver o uso.',
     'Premium requests':'Solicitações premium',
@@ -647,6 +720,7 @@ const TEXT={
     'Sign in to Cursor to see usage.':'Увійдіть у Cursor, щоб бачити використання.',
     'Sign in to Codex to see usage.':'Увійдіть у Codex, щоб бачити використання.',
     'Sign in to Antigravity to see usage.':'Увійдіть в Antigravity, щоб бачити використання.',
+    'Sign in to qodercli to see usage.':'Увійдіть у qodercli, щоб бачити використання.',
     'Run grok login to see usage.':'Запустіть grok login, щоб бачити використання.',
     'Run gh auth login to see usage.':'Запустіть gh auth login, щоб бачити використання.',
     'Premium requests':'Преміум-запити',
@@ -656,6 +730,67 @@ const TEXT={
     'No OpenCode Go subscription on this account':'Для цього акаунта немає підписки OpenCode Go',
     'needs your input':'потрібна ваша відповідь',
     'Working in':'Працює в'
+  },
+  es:{
+    'Included usage':'Uso incluido',
+    'Sign in':'Iniciar sesión',
+    'Signing in...':'Iniciando sesión...',
+    'Refresh':'Actualizar',
+    'Browser sign-in through Claude Code':'Inicio de sesión en el navegador con Claude Code',
+    'Complete sign-in in the browser or terminal window.':'Termina de iniciar sesión en el navegador o en la terminal.',
+    'Sign-in complete. Refreshing usage...':'Sesión iniciada. Actualizando el uso...',
+    'Sign-in cancelled, failed or timed out. Try again.':'El inicio de sesión se canceló, falló o caducó. Vuelve a intentarlo.',
+    'Checking usage...':'Comprobando el uso...',
+    'Rate limited. Wait for the retry deadline.':'Límite de solicitudes alcanzado. Espera hasta el próximo reintento.',
+    'Claude Code CLI not found. Install the standalone CLI first.':'No se encontró la CLI de Claude Code. Instala primero la CLI independiente.',
+    'Claude sign-in or renewal is already running.':'Ya hay un inicio de sesión o una renovación de Claude en curso.',
+    'Unable to open Claude sign-in window.':'No se pudo abrir la ventana de inicio de sesión de Claude.',
+    'Claude HTTP 403: access denied. Check network or account access; sign-in may still be valid.':'Claude HTTP 403: acceso denegado. Revisa la red o el acceso de la cuenta; la sesión puede seguir siendo válida.',
+    'API usage':'Uso de API',
+    'On demand':'Bajo demanda',
+    'Usage':'Uso',
+    'Current session':'Sesión actual',
+    'Weekly (all models)':'Semanal (todos los modelos)',
+    'Weekly (Opus)':'Semanal (Opus)',
+    'Weekly (model-scoped)':'Semanal (por modelo)',
+    'Weekly limit':'Límite semanal',
+    'Weekly Limit':'Límite semanal',
+    '5-Hour Limit':'Límite de 5 horas',
+    '5-hour Limit':'Límite de 5 horas',
+    'Gemini Models':'Modelos Gemini',
+    'Claude and GPT models':'Modelos Claude y GPT',
+    'Monthly limit':'Límite mensual',
+    'Monthly Limit':'Límite mensual',
+    'Longer window':'Periodo más largo',
+    'Requests today · no limit published':'Solicitudes hoy · sin límite publicado',
+    'Updated':'Actualizado',
+    'Resetting…':'Renovando…',
+    'Resets at':'Se renueva:',
+    'Resets':'Se renueva',
+    'Working':'Trabajando',
+    'Waiting':'Esperando',
+    'Streaming (network)':'Transmitiendo (red)',
+    'Rate limited, retrying in':'Límite de solicitudes, reintento en',
+    'Rate limited — retrying in':'Límite de solicitudes — reintento en',
+    'request today':'solicitud hoy',
+    'requests today':'solicitudes hoy',
+    'no requests today':'sin solicitudes hoy',
+    'Waiting for first reading…':'Esperando la primera lectura…',
+    'Sign in to Claude Code to see usage.':'Inicia sesión en Claude Code para ver el uso.',
+    'Sign in to Cursor to see usage.':'Inicia sesión en Cursor para ver el uso.',
+    'Sign in to Codex to see usage.':'Inicia sesión en Codex para ver el uso.',
+    'Sign in to Antigravity to see usage.':'Inicia sesión en Antigravity para ver el uso.',
+    'Run grok login to see usage.':'Ejecuta grok login para ver el uso.',
+    'Run gh auth login to see usage.':'Ejecuta gh auth login para ver el uso.',
+    'Premium requests':'Solicitudes premium',
+    'Chat requests':'Solicitudes de chat',
+    'Completions':'Autocompletados',
+    'Run opencode auth login to see usage.':'Ejecuta opencode auth login para ver el uso.',
+    'No OpenCode Go subscription on this account':'Esta cuenta no tiene suscripción a OpenCode Go',
+    'needs your input':'espera tu respuesta',
+    'Working in':'Trabajando en',
+    'Last known usage — not current.':'Último uso conocido, no el actual.',
+    'Last reported reset':'Última renovación'
   },
   ru:{
     'of budget':'от бюджета','This month':'Этот месяц','Today':'Сегодня','Prepaid balance':'Баланс (предоплата)','Last charge':'Последнее списание','Updated':'Обновлено',
@@ -708,6 +843,7 @@ const TEXT={
     'Sign in to Cursor to see usage.':'Войдите в Cursor, чтобы увидеть использование.',
     'Sign in to Codex to see usage.':'Войдите в Codex, чтобы увидеть использование.',
     'Sign in to Antigravity to see usage.':'Войдите в Antigravity, чтобы увидеть использование.',
+    'Sign in to qodercli to see usage.':'Войдите в qodercli, чтобы увидеть использование.',
     'Run grok login to see usage.':'Выполните grok login, чтобы увидеть использование.',
     'Run gh auth login to see usage.':'Выполните gh auth login, чтобы увидеть использование.',
     'Premium requests':'Премиум-запросы',
@@ -751,6 +887,7 @@ const TEXT={
     'Sign in to Cursor to see usage.':'请登录 Cursor 以查看用量。',
     'Sign in to Codex to see usage.':'请登录 Codex 以查看用量。',
     'Sign in to Antigravity to see usage.':'请登录 Antigravity 以查看用量。',
+    'Sign in to qodercli to see usage.':'请登录 qodercli 以查看用量。',
     'Run grok login to see usage.':'请运行 grok login 以查看用量。',
     'Run gh auth login to see usage.':'请运行 gh auth login 以查看用量。',
     'Premium requests':'高级请求',
@@ -810,6 +947,7 @@ const TEXT={
     'Sign in to Cursor to see usage.':'請登入 Cursor 以查看用量。',
     'Sign in to Codex to see usage.':'請登入 Codex 以查看用量。',
     'Sign in to Antigravity to see usage.':'請登入 Antigravity 以查看用量。',
+    'Sign in to qodercli to see usage.':'請登入 qodercli 以查看用量。',
     'Run grok login to see usage.':'請執行 grok login 以查看用量。',
     'Run gh auth login to see usage.':'請執行 gh auth login 以查看用量。',
     'Premium requests':'進階請求',
@@ -952,6 +1090,44 @@ const PATTERNS={
     [/Sign in to Cursor \(the editor\) to see usage\./g,'Увійдіть у Cursor (редактор), щоб бачити використання.'],
     [/Cursor session was rejected — sign in again in the editor/g,'Сеанс Cursor відхилено — увійдіть у редакторі ще раз'],
   ],
+  es:[
+    [/^(\d+)m limit$/,'Límite de $1 min'],
+    [/^(\d+)h limit$/,'Límite de $1 h'],
+    [/^(\d+)d limit$/,'Límite de $1 d'],
+    [/^Rate limited, retrying in (\d+)s$/,'Límite de solicitudes, reintento en $1 s'],
+    [/^Rate limited — retrying in (\d+)s$/,'Límite de solicitudes — reintento en $1 s'],
+    [/^Unlimited on the (.+) plan — nothing to meter$/,'Ilimitado en el plan $1 — nada que medir'],
+    [/^The (.+) plan has nothing for Cursor to meter yet$/,'El plan $1 aún no tiene nada que Cursor pueda medir'],
+    [/^(.+) · Google publishes no quota for this account$/,'$1 · Google no publica cuota para esta cuenta'],
+    [/^Live read failed \((.+)\)$/,'Falló la lectura en vivo ($1)'],
+    [/Weekly \(all models\)/g,'Semanal (todos los modelos)'],
+    [/Weekly \(Opus\)/g,'Semanal (Opus)'],
+    [/Weekly \(model-scoped\)/g,'Semanal (por modelo)'],
+    [/Weekly limit/g,'Límite semanal'],
+    [/Monthly limit/g,'Límite mensual'],
+    [/\bWeekly\b/g,'Semanal'],
+    [/\bMonthly\b/g,'Mensual'],
+    [/ · via /g,' · vía '],
+    [/needs your input/g,'espera tu respuesta'],
+    [/^Working in /,'Trabajando en '],
+    [/via Antigravity CLI/g,'vía la CLI de Antigravity'],
+    [/via Antigravity/g,'vía Antigravity'],
+    [/via Google/g,'vía Google'],
+    [/No Claude Code credential found/g,'No se encontró ninguna credencial de Claude Code'],
+    [/Credential expired — run claude once in a terminal to renew it/g,'La credencial caducó — ejecuta claude una vez en una terminal para renovarla'],
+    [/Credential rejected \(switched accounts\?\)/g,'Credencial rechazada (¿cambiaste de cuenta?)'],
+    [/Codex sign-in expired — open Codex once to refresh it/g,'La sesión de Codex caducó — abre Codex una vez para actualizarla'],
+    [/Codex rejected its sign-in — sign in to Codex again/g,'Codex rechazó la sesión — vuelve a iniciar sesión en Codex'],
+    [/Codex reported no usage windows/g,'Codex no informó ningún periodo de uso'],
+    [/Codex has not recorded a usage snapshot yet/g,'Codex aún no registró ninguna instantánea de uso'],
+    [/from last Codex run/g,'de la última ejecución de Codex'],
+    [/Waiting for Antigravity CLI quota/g,'Esperando la cuota de la CLI de Antigravity'],
+    [/Open Antigravity to read its quota/g,'Abre Antigravity para leer su cuota'],
+    [/Antigravity's Google session was rejected — sign in again in Antigravity/g,'Se rechazó la sesión de Google de Antigravity — vuelve a iniciar sesión en Antigravity'],
+    [/Antigravity is closed — last reading kept/g,'Antigravity está cerrado — se conserva la última lectura'],
+    [/Sign in to Cursor \(the editor\) to see usage\./g,'Inicia sesión en Cursor (el editor) para ver el uso.'],
+    [/Cursor session was rejected — sign in again in the editor/g,'Se rechazó la sesión de Cursor — vuelve a iniciar sesión en el editor'],
+  ],
   ru:[
     [/^(\d+)m limit$/,'Лимит на $1 мин'],
     [/^This month · budget (.+)$/,'Этот месяц · бюджет $1'],
@@ -1078,32 +1254,37 @@ const UI={
   ko:{locale:'ko-KR',title:n=>n+' 사용량',resetting:'재설정 중…',resetsIn:m=>`${m}분 후 재설정`,
       resetsAt:t=>`${t}에 재설정`,resetsOn:(d,t)=>`${d} ${t}에 재설정`,resetsDate:d=>`${d}에 재설정`,
       ago:m=>m<60?`${m}분 전`:`${Math.round(m/60)}시간 전`,
-      usedLeft:(used,left)=>`${used}% 사용 · ${left}% 남음`,leftUsed:(left,used)=>`${left}% 남음 · ${used}% 사용`,andMore:n=>`외 ${n}개`,updated:a=>`${a}에 마지막 업데이트됨`},
+      usedLeft:(used,left)=>`${used}% 사용 · ${left}% 남음`,leftUsed:(left,used)=>`${left}% 남음 · ${used}% 사용`,deficit:v=>`${v}% 초과`,andMore:n=>`외 ${n}개`,updated:a=>`${a}에 마지막 업데이트됨`},
   'pt-BR':{locale:'pt-BR',title:n=>'Uso do '+n,resetting:'Renovando…',resetsIn:m=>`Renova em ${m} min`,
       resetsAt:t=>`Renova às ${t}`,resetsOn:(d,t)=>`Renova ${d} às ${t}`,resetsDate:d=>`Renova ${d}`,
       ago:m=>m<60?`há ${m} min`:`há ${Math.round(m/60)} h`,
-      usedLeft:(used,left)=>`${used}% usado · ${left}% restante`,leftUsed:(left,used)=>`${left}% restante · ${used}% usado`,andMore:n=>`e mais ${n}`},
+      usedLeft:(used,left)=>`${used}% usado · ${left}% restante`,leftUsed:(left,used)=>`${left}% restante · ${used}% usado`,deficit:v=>`${v}% de déficit`,andMore:n=>`e mais ${n}`},
   en:{locale:'en-US',title:n=>n+' Usage',resetting:'Resetting…',resetsIn:m=>`Resets in ${m} min`,
       resetsAt:t=>`Resets at ${t}`,resetsOn:(d,t)=>`Resets ${d} ${t}`,resetsDate:d=>`Resets ${d}`,
       ago:m=>m<60?`${m}m ago`:`${Math.round(m/60)}h ago`,
-      usedLeft:(used,left)=>`${used}% Used · ${left}% left`,leftUsed:(left,used)=>`${left}% left · ${used}% Used`,andMore:n=>`and ${n} more`,updated:a=>`Updated ${a}`},
+      usedLeft:(used,left)=>`${used}% Used · ${left}% left`,leftUsed:(left,used)=>`${left}% left · ${used}% Used`,deficit:v=>`${v}% deficit`,andMore:n=>`and ${n} more`,updated:a=>`Updated ${a}`},
   uk:{locale:'uk-UA',title:n=>'Використання '+n,resetting:'Скидання…',resetsIn:m=>`Скидання через ${m} хв`,
       resetsAt:t=>`Скидання о ${t}`,resetsOn:(d,t)=>`Скидання: ${d} ${t}`,resetsDate:d=>`Скидання: ${d}`,
       ago:m=>m<60?`${m} хв тому`:`${Math.round(m/60)} год тому`,
-      usedLeft:(used,left)=>`Використано ${used}% · лишилось ${left}%`,leftUsed:(left,used)=>`лишилось ${left}% · Використано ${used}%`,andMore:n=>`і ще ${n}`,updated:a=>`Оновлено ${a}`},
+      usedLeft:(used,left)=>`Використано ${used}% · лишилось ${left}%`,leftUsed:(left,used)=>`лишилось ${left}% · Використано ${used}%`,deficit:v=>`${v}% дефіциту`,andMore:n=>`і ще ${n}`,updated:a=>`Оновлено ${a}`},
+  es:{locale:'es',title:n=>'Uso de '+n,resetting:'Renovando…',resetsIn:m=>`Se renueva en ${m} min`,
+      resetsAt:t=>`Se renueva: ${t}`,resetsOn:(d,t)=>`Se renueva el ${d} ${t}`,resetsDate:d=>`Se renueva el ${d}`,
+      ago:m=>m<60?`hace ${m} min`:`hace ${Math.round(m/60)} h`,
+      usedLeft:(used,left)=>`${used}% usado · ${left}% restante`,leftUsed:(left,used)=>`${left}% restante · ${used}% usado`,deficit:v=>`${v}% de déficit`,andMore:n=>`y ${n} más`,updated:a=>`Actualizado ${a}`},
   ru:{locale:'ru-RU',title:n=>'Использование '+n,resetting:'Сброс…',resetsIn:m=>`Сброс через ${m} мин`,
       resetsAt:t=>`Сброс в ${t}`,resetsOn:(d,t)=>`Сброс: ${d} ${t}`,resetsDate:d=>`Сброс: ${d}`,
       ago:m=>m<60?`${m} мин назад`:`${Math.round(m/60)} ч назад`,
-      usedLeft:(used,left)=>`Использовано ${used}% · осталось ${left}%`,leftUsed:(left,used)=>`осталось ${left}% · Использовано ${used}%`,andMore:n=>`и ещё ${n}`,updated:a=>`Обновлено ${a}`},
+      usedLeft:(used,left)=>`Использовано ${used}% · осталось ${left}%`,leftUsed:(left,used)=>`осталось ${left}% · Использовано ${used}%`,deficit:v=>`дефицит ${v}%`,andMore:n=>`и ещё ${n}`,updated:a=>`Обновлено ${a}`},
   zh:{locale:'zh-CN',title:n=>n+' 用量',resetting:'正在重置…',resetsIn:m=>`${m} 分钟后重置`,
       resetsAt:t=>`${t} 重置`,resetsOn:(d,t)=>`${d} ${t} 重置`,resetsDate:d=>`${d} 重置`,
       ago:m=>m<60?`${m} 分钟前`:`${Math.round(m/60)} 小时前`,
-      usedLeft:(used,left)=>`已用 ${used}% · 剩余 ${left}%`,leftUsed:(left,used)=>`剩余 ${left}% · 已用 ${used}%`,andMore:n=>`另有 ${n} 个`,updated:a=>`更新于 ${a}`},
+      usedLeft:(used,left)=>`已用 ${used}% · 剩余 ${left}%`,leftUsed:(left,used)=>`剩余 ${left}% · 已用 ${used}%`,deficit:v=>`${v}% 透支`,andMore:n=>`另有 ${n} 个`,updated:a=>`更新于 ${a}`},
   'zh-Hant':{locale:'zh-TW',title:n=>n+' 用量',resetting:'正在重置…',resetsIn:m=>`${m} 分鐘後重置`,
       resetsAt:t=>`${t} 重置`,resetsOn:(d,t)=>`${d} ${t} 重置`,resetsDate:d=>`${d} 重置`,
       ago:m=>m<60?`${m} 分鐘前`:`${Math.round(m/60)} 小時前`,
-      usedLeft:(used,left)=>`已用 ${used}% · 剩餘 ${left}%`,leftUsed:(left,used)=>`剩餘 ${left}% · 已用 ${used}%`,andMore:n=>`另有 ${n} 個`,updated:a=>`更新於 ${a}`},
+      usedLeft:(used,left)=>`已用 ${used}% · 剩餘 ${left}%`,leftUsed:(left,used)=>`剩餘 ${left}% · 已用 ${used}%`,deficit:v=>`${v}% 透支`,andMore:n=>`另有 ${n} 個`,updated:a=>`更新於 ${a}`},
 };
+UI.ja={...UI.en,usedLeft:UI.en.usedLeft,deficit:v=>`${v}% 超過`};
 function ui(){return UI[uiLang]||UI.en;}
 function textCopy(value){
   if(!value) return '';
@@ -1115,7 +1296,7 @@ function textCopy(value){
   return out;
 }
 function setUiLanguage(lang){
-  const next=TEXT[lang]?lang:'en';
+  const next=TEXT[lang]||UI[lang]?lang:'en';
   if(uiLang===next) return;
   uiLang=next;
   renderRing();
@@ -1157,6 +1338,14 @@ function slotFor(id){
 // would have had on their own, so headlineOf and weeklyOf need no rule about accounts. `base` is the
 // provider the cell belongs to (glyph, activity, slot choice); `id` is what makes the cell unique.
 function claudeCells(){
+  if(Array.isArray(usage.accounts) && usage.accounts.length){
+    const several=usage.accounts.length>1;
+    return usage.accounts.map(a=>({id:a.id==='default'?'claude':'claude@'+a.id,base:'claude',
+      name:a.name==='default'?'Claude':a.name,glyph:'C',snap:{status:a.status,note:a.note,
+        fetched_at:a.fetched_at,windows:a.windows,backoff_until:a.backoff_until||0},
+      account:several?accountLine(a):''}));
+  }
+  if(usage.status==='absent') return [];
   const ws=Array.isArray(usage.windows)?usage.windows:[];
   const accounts=[];
   for(const w of ws){
@@ -1174,15 +1363,23 @@ function claudeCells(){
       .map(w=>Object.assign({},w,{id:String(w.id).split('@')[0]}))})
   }));
 }
+// Which account a card belongs to, said under its title: "someone@gmail.com · Max"
+function accountLine(a){
+  const plan=typeof a.plan==='string'&&a.plan?a.plan.charAt(0).toUpperCase()+a.plan.slice(1):'';
+  return [a.address||'',plan].filter(Boolean).join(' · ');
+}
 function providers(){
   const list=claudeCells();
   if(codexSnap.status!=='absent') list.push({id:'codex',base:'codex',name:'Codex',glyph:'Cx',snap:codexSnap});
   if(glmSnap.status!=='absent') list.push({id:'glm',base:'glm',name:'z.ai',glyph:'Z.ai',snap:glmSnap});
+  if(deepseekSnap.status!=='absent') list.push({id:'deepseek',base:'deepseek',name:'DeepSeek Harness',glyph:'DS',snap:deepseekSnap});
   if(opencodeSnap.status!=='absent') list.push({id:'opencode',base:'opencode',name:'OpenCode',glyph:'OC',snap:opencodeSnap});
+  if(commandcodeSnap.status!=='absent') list.push({id:'commandcode',base:'commandcode',name:'Command Code',glyph:'CC',snap:commandcodeSnap});
   if(cursorSnap.status!=='absent') list.push({id:'cursor',base:'cursor',name:'Cursor',glyph:'Cu',snap:cursorSnap});
   if(grokSnap.status!=='absent') list.push({id:'grok',base:'grok',name:'Grok',glyph:'Gk',snap:grokSnap});
   if(copilotSnap.status!=='absent') list.push({id:'copilot',base:'copilot',name:'GitHub Copilot',glyph:'Cp',snap:copilotSnap});
   if(agSnap.status!=='absent') list.push({id:'gemini',base:'gemini',name:'Antigravity',glyph:'Ag',snap:agSnap});
+  if(qoderSnap.status!=='absent') list.push({id:'qoder',base:'qoder',name:'Qoder',glyph:'Q',snap:qoderSnap});
   if(anthApiSnap.status!=='absent') list.push({id:'anthropic_api',base:'anthropic_api',glyphId:'claude',badge:'$',name:'Anthropic API',glyph:'A$',snap:anthApiSnap});
   if(oaiApiSnap.status!=='absent') list.push({id:'openai_api',base:'openai_api',glyphId:'codex',badge:'$',name:'OpenAI API',glyph:'O$',snap:oaiApiSnap});
   if(xaiApiSnap.status!=='absent') list.push({id:'xai_api',base:'xai_api',glyphId:'grok',badge:'$',name:'xAI API',glyph:'X$',snap:xaiApiSnap});
@@ -1219,6 +1416,9 @@ function headlineOf(snap,id){
   if(id==='claude'||id==='cursor'||id==='glm'||id==='opencode') return tightestOf(ws)||ws[0];
   if(id==='grok') return ws.find(w=>w.id==='credits')||ws[0];
   if(id==='copilot') return ws.find(w=>w.id==='premium_interactions')||ws[0];
+  if(id==='deepseek') return ws.find(w=>w.id==='today')||null;
+  if(id==='commandcode') return ws.find(w=>w.id==='monthly')||null;
+  if(id==='qoder') return ws.find(w=>w.id==='quota')||null;
   const fam=ws.filter(w=>laneFamily(w)===agPrefs.model), lanes=fam.length?fam:ws;
   if(agPrefs.limit!=='automatic'){ const w=tightestOf(lanes.filter(w=>laneIs(w,agPrefs.limit))); if(w) return w; }
   return tightestOf(lanes.filter(w=>w.used<1))||tightestOf(lanes)||lanes[0];
@@ -1236,7 +1436,10 @@ function weeklyOf(snap,id){
   if(id==='grok') return null; // the credits window is already the weekly one
   if(id==='copilot') return null; // monthly quotas only; nothing weekly to draw
   if(id==='glm') return byId('weekly');
+  if(id==='deepseek') return null;
   if(id==='opencode') return byId('weekly');
+  if(id==='commandcode') return byId('weekly');
+  if(id==='qoder') return null; // one plan window renewing at expiresAt; nothing weekly
   const fam=ws.filter(w=>laneFamily(w)===agPrefs.model), lanes=fam.length?fam:ws;
   return tightestOf(lanes.filter(w=>laneIs(w,'weekly')));
 }
@@ -1426,12 +1629,12 @@ function renderCard(){
   const p=providers().find(x=>x.id===hoverId)||providers()[0];
   const snap=p.snap;
   const headIcon=glyphHtml(p,true);
-  // p.name is no longer a constant: for a second account it is built from the home
-  // directory's slug and the subscriptionType read out of .credentials.json.
-  let html=`<div class="c-head">${headIcon}<span class="c-title">${esc(ui().title(p.name))}</span></div>`;
+  // Several Claude accounts share the provider's title, and the line under it says whose card it is
+  let html=`<div class="c-head">${headIcon}<span class="c-title">${esc(ui().title(p.account?'Claude':p.name))}</span></div>`;
+  if(p.account) html+=`<div class="c-sub c-account">${esc(p.account)}</div>`;
   if(staleOf(snap)&&snap.fetched_at) html+=`<div class="c-sub">${ui().updated(ago(snap.fetched_at))}</div>`;
   if(snap.status==='needsAuth'){
-    const who={claude:'Sign in to Claude Code to see usage.',cursor:'Sign in to Cursor to see usage.',codex:'Sign in to Codex to see usage.',grok:'Run grok login to see usage.',copilot:'Run gh auth login to see usage.',opencode:'Run opencode auth login to see usage.',anthropic_api:'Enter a valid Anthropic admin key in Settings → API spend.',openai_api:'Enter a valid OpenAI admin key in Settings → API spend.',xai_api:'Enter a valid xAI management key in Settings → API spend.',gemini:'Sign in to Antigravity to see usage.'}[p.base]||'';
+    const who={claude:'Sign in to Claude Code to see usage.',cursor:'Sign in to Cursor to see usage.',codex:'Sign in to Codex to see usage.',grok:'Run grok login to see usage.',copilot:'Run gh auth login to see usage.',opencode:'Run opencode auth login to see usage.',commandcode:'Sign in with the Command Code app to read your usage.',gemini:'Sign in to Antigravity to see usage.',qoder:'Sign in to qodercli to see usage.',anthropic_api:'Enter a valid Anthropic admin key in Settings → API spend.',openai_api:'Enter a valid OpenAI admin key in Settings → API spend.',xai_api:'Enter a valid xAI management key in Settings → API spend.'}[p.base]||'';
     // A dollar cell's own note already says exactly what is wrong with its key; the generic hint
     // above it would only say the same thing twice, once in each language
     const parts=/_api$/.test(p.base)&&snap.note?[textCopy(snap.note)]:[textCopy(who),textCopy(snap.note||'')];
@@ -1500,6 +1703,7 @@ function renderCard(){
 // The Mac's NotchLayout.tailGap and tailLength: the tail's tip stops short of the notch, as the CSS above has it
 const TAIL_GAP=10.5, TAIL_LENGTH=28.2;
 function placeCard(){
+  if(CARD_ONLY){ placeTaskbarCard(); return; }
   // Rects and the viewport come back zoomed when fitZoom has zoomed the page; offsetWidth/Height and
   // the styles written here are not, so the rects are brought back first, as placeHandles does. Mixed,
   // a page zoomed past 1 put the bottom edge's card down behind the pill, which then hid all but its top.
@@ -1533,12 +1737,46 @@ function placeCard(){
   }
 }
 
+// The taskbar's hover card: the tail at the window's edge nearest the strip, its point on the hovered
+// ring, and the card past it. Rust sizes the window to the two and puts it above the strip, or below
+// a top taskbar; until a new height is in, the card keeps its place and only its far edge moves.
+let cardTail=null, cardShownId=null, lastCardSize='', cardReady=false;
+function placeTaskbarCard(){
+  const below=!!(cardTail&&cardTail.below), k=window.devicePixelRatio||1, tw=tail.offsetWidth||33;
+  document.documentElement.classList.toggle('below',below);
+  card.style.top=below?TAIL_LENGTH+'px':'auto'; card.style.bottom=below?'auto':TAIL_LENGTH+'px';
+  tail.style.top=below?'0px':'auto'; tail.style.bottom=below?'auto':'0px';
+  const ch=card.offsetHeight, cw=card.offsetWidth;
+  const x=cardTail&&Number.isFinite(cardTail.x)?cardTail.x/k:cw/2;
+  // A card coming up fresh starts at its ring; only one already showing travels
+  tail.style.transition=cardTail&&cardTail.glide?'':'none';
+  tail.style.left=Math.round(Math.max(16,Math.min(cw-16-tw,x-tw/2)))+'px';
+  const height=Math.ceil(ch+TAIL_LENGTH), key=cardShownId+'|'+height+'|'+k;
+  if(!cardShownId||key===lastCardSize) return;
+  lastCardSize=key;
+  // Ready only once measured, so the first showing is already the card's own height
+  invoke('report_taskbar_hover_size',{id:cardShownId,height,dpr:k})
+    .then(()=>{ if(!cardReady){ cardReady=true; return invoke('taskbar_ready'); } })
+    .catch(()=>{lastCardSize='';});
+}
+
 function esc(s){const d=document.createElement('div');d.textContent=s||'';return d.innerHTML;}
 
 /* Hover: stays expanded while either the pill or the card is under the cursor; collapses after a 250 ms grace period (upstream motion rule) */
 const card=document.getElementById('card'), pill=document.getElementById('pill'), tail=document.getElementById('tail');
+// Rust lets clicks through everything outside the hot rectangles, so they travel with the card, frame
+// by frame, and settle where it stops. A card already where it is going gets no transitionend.
+let glideEnd=null;
+function glideCard(){
+  card.classList.add('gliding'); tail.classList.add('gliding');
+  clearTimeout(glideEnd); glideEnd=setTimeout(endGlide,400);
+  requestAnimationFrame(followGlide);
+}
+function followGlide(){ if(!card.classList.contains('gliding')) return; reportHot(); requestAnimationFrame(followGlide); }
+function endGlide(){ clearTimeout(glideEnd); card.classList.remove('gliding'); tail.classList.remove('gliding'); reportHot(); }
+card.addEventListener('transitionend',e=>{ if(e.target===card&&(e.propertyName==='top'||e.propertyName==='left')) endGlide(); });
 let hideTimer=null;
-function showCard(){clearTimeout(hideTimer);card.classList.add('show');renderCard();armWatchdog();refreshClock();} // show first, then render: placeCard needs offsetHeight
+function showCard(){clearTimeout(hideTimer);clearTimeout(glideEnd);card.classList.remove('gliding');tail.classList.remove('gliding');card.classList.add('show');renderCard();armWatchdog();refreshClock();} // show first, then render: placeCard needs offsetHeight
 // Nothing is broadcast when the Windows clock format changes, so ask again each time the card opens
 function refreshClock(){
   invoke('get_state').then(s=>{
@@ -1547,7 +1785,7 @@ function refreshClock(){
     if(card.classList.contains('show')) renderCard();
   }).catch(()=>{});
 }
-function hideCard(){card.classList.remove('show');reportHot();}
+function hideCard(){if(CARD_ONLY) return;card.classList.remove('show');reportHot();}
 function scheduleHide(){clearTimeout(hideTimer);hideTimer=setTimeout(hideCard,250);}
 // ===== Diagnostics + geometry =====
 function jslog(m){invoke('log_js',{msg:String(m)}).catch(()=>{});}
@@ -1570,6 +1808,8 @@ function tailReach(){
 /* Rust gates click-through on these, so they are reported whenever the pill or card moves, not only
    when the card opens: a stale pill rectangle is a pill that cannot be clicked. */
 function reportHot(){
+  if(CARD_ONLY) return;
+  paintPillContour();
   if(folded){ callq('set_hot',{rects:[wakeRect()],expanded:false,probe:probeRect()}).catch(()=>{}); return; }
   const open=card.classList.contains('show');
   const rects=open?[rectOf(pill),tailReach(),rectOf(card)]:[rectOf(pill)];
@@ -1612,12 +1852,14 @@ function armWatchdog(){
 const DESIGN_W_UPRIGHT=360, DESIGN_W_FLAT=650;
 function designWidth(){ return edgeIsVertical()?DESIGN_W_UPRIGHT:DESIGN_W_FLAT; }
 function fitZoom(){
+  if(CARD_ONLY) return 1;
   const z=innerWidth/designWidth();
   document.documentElement.style.zoom=(Math.abs(z-1)>0.02)?String(z):'';
   return z;
 }
 // `settled` only from the end of a burst of resizes, which is what a landing waits for (land_on_another_screen)
 function reportDpr(settled){
+  if(CARD_ONLY) return;
   const z=fitZoom();
   jslog(`dpr=${window.devicePixelRatio} inner=${innerWidth}x${innerHeight} cssZoom=${z.toFixed(3)}`);
   callq('report_dpr',{dpr:window.devicePixelRatio||1,w:innerWidth,h:innerHeight,settled:settled===true}).catch(()=>{});
@@ -1631,10 +1873,12 @@ matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`).addEventListener('cha
 // invisible while it is resized and re-zoomed, and say so once that has painted — hiding the window
 // itself would pause the page, and the re-zoom would then happen in plain view
 listen('notch_landing',()=>{
+  if(CARD_ONLY) return;
   document.documentElement.style.visibility='hidden';
   requestAnimationFrame(()=>requestAnimationFrame(()=>invoke('notch_hidden').catch(()=>{})));
 }).catch(()=>{});
 listen('notch_reveal',()=>{
+  if(CARD_ONLY) return;
   document.documentElement.style.visibility='';
   if(carried){
     carried=false;
@@ -1663,6 +1907,8 @@ function pointerInHot(x,y){
 }
 let hideLogged=0;
 document.addEventListener('mousemove',e=>{
+  if(CARD_ONLY) return;
+  if(isLinux){ pointerIn=true; clearTimeout(foldTimer); clearTimeout(tuckTimer); }
   // Folded, the page is sent events only over the pill, so any movement at all is the pointer reaching it
   if(folded){ pointerIn=true; unfold(); }
   if(dragging)return; // no card while dragging
@@ -1672,12 +1918,14 @@ document.addEventListener('mousemove',e=>{
   if(hot){
     clearTimeout(hideTimer);
     const id=cellAt(e.clientX,e.clientY);
-    if(id&&id!==hoverId){ hoverId=id; if(card.classList.contains('show')){ renderCard(); armWatchdog(); } }
+    if(id&&id!==hoverId){ hoverId=id; if(card.classList.contains('show')){ glideCard(); renderCard(); armWatchdog(); } }
     if(!card.classList.contains('show')) showCard();
   }
   else if(card.classList.contains('show')){ if(hideLogged++<5) jslog(`mousemove left the hot area -> collapse at ${e.clientX},${e.clientY}`); scheduleHide(); }
 });
 document.addEventListener('mouseout',e=>{ // relatedTarget null = the cursor left the page
+  if(CARD_ONLY) return;
+  if(isLinux&&!e.relatedTarget){ pointerIn=false; setHovered(null); scheduleFold(); }
   if(!e.relatedTarget && card.classList.contains('show')){ if(hideLogged++<5) jslog('mouseout left the page -> collapse'); scheduleHide(); }
 });
 listen('pointer_left',()=>{clearTimeout(hideTimer);hideCard();}).catch(()=>{});
@@ -1803,6 +2051,7 @@ const orb=document.getElementById('orb');
 const HANDLE_REACH=28.5; // the Mac's hot zone, half of 57
 let orbAt=null, hovered=null, orbSpins=0;
 let showRemaining=false;
+let showPace=false;
 // The grip (NotchLayout's): a dot, dot centre to dot centre, the orb's disc and the gap from it, and
 // the grip's hot zone. Its middle is the disc, the gap and half its own width out. Smaller than the
 // Mac's 7.15 and 11.66 and 7 further from the orb than its 4.89, which crowded the orb here.
@@ -2193,7 +2442,7 @@ function holdOrb(){ release=null; orb.classList.remove('releasing'); runGrip(); 
 const FOLD_GRACE=450; // NotchWindowController.foldGrace
 function foldAllowed(){ return (onHover||fullScreen)&&!pointerIn&&!dragging&&!menuOpen; }
 function setFolded(f){
-  if(f===folded) return;
+  if(f===folded||CARD_ONLY) return;
   folded=f;
   if(f){ clearTimeout(hideTimer); hideCard(); arcIn(true); setHovered(null); } else arcOut();
   document.body.classList.toggle('folded',f);
@@ -2219,8 +2468,15 @@ function applyFullScreen(on){
 }
 listen('full_screen',e=>applyFullScreen(e.payload)).catch(()=>{});
 invoke('get_full_screen').then(applyFullScreen).catch(()=>{});
+// Called by GTK crossing events on Linux; the native side owns the leave grace timer.
+if(isLinux) window.codenotchPointer = inside => {
+  pointerIn=inside;
+  if(inside){ clearTimeout(hideTimer); unfold(); }
+  else if(!dragging){ setHovered(null); clearTimeout(hideTimer); hideCard(); scheduleFold(); }
+};
 // Off the notch is off the orb too: once the window is click-through the page may never see it leave
 listen('notch_pointer',e=>{
+  if(CARD_ONLY) return;
   pointerIn=e.payload===true;
   if(pointerIn) unfold(); else { if(!dragging) setHovered(null); scheduleFold(); }
 }).catch(()=>{});
@@ -2232,6 +2488,8 @@ listen('pill_backdrop',e=>{
 invoke('get_ui_flags').then(applyUiFlags).catch(()=>{});
 listen('notch_shows_remaining',e=>{ showRemaining=e.payload===true; renderRing(); }).catch(()=>{});
 invoke('get_notch_shows_remaining').then(v=>{ showRemaining=v===true; renderRing(); }).catch(()=>{});
+listen('show_usage_pace',e=>{ showPace=e.payload===true; if(card.classList.contains('show')) renderCard(); }).catch(()=>{});
+invoke('get_show_usage_pace').then(v=>{ showPace=v===true; }).catch(()=>{});
 
 listen('usage',e=>{usage=e.payload||usage;claudeActionMessage='';settle('claude');renderRing();if(card.classList.contains('show'))renderCard();})
   .catch(e=>notice('listen(usage) failed: '+e));
@@ -2256,8 +2514,14 @@ invoke('get_xai_api').then(u=>{xaiApiSnap=u||xaiApiSnap;renderRing();}).catch(()
 invoke('get_antigravity').then(u=>{agSnap=u||agSnap;renderRing();}).catch(()=>{});
 listen('glm',e=>{glmSnap=e.payload||glmSnap;renderRing();if(card.classList.contains('show'))renderCard();}).catch(()=>{});
 invoke('get_glm').then(u=>{glmSnap=u||glmSnap;renderRing();}).catch(()=>{});
+listen('deepseek',e=>{deepseekSnap=e.payload||deepseekSnap;renderRing();if(card.classList.contains('show'))renderCard();}).catch(()=>{});
+invoke('get_deepseek').then(u=>{deepseekSnap=u||deepseekSnap;renderRing();}).catch(()=>{});
 listen('opencode',e=>{opencodeSnap=e.payload||opencodeSnap;settle('opencode');renderRing();if(card.classList.contains('show'))renderCard();}).catch(()=>{});
 invoke('get_opencode').then(u=>{opencodeSnap=u||opencodeSnap;renderRing();}).catch(()=>{});
+listen('commandcode',e=>{commandcodeSnap=e.payload||commandcodeSnap;settle('commandcode');renderRing();if(card.classList.contains('show'))renderCard();}).catch(()=>{});
+invoke('get_commandcode').then(u=>{commandcodeSnap=u||commandcodeSnap;renderRing();}).catch(()=>{});
+listen('qoder',e=>{qoderSnap=e.payload||qoderSnap;settle('qoder');renderRing();if(card.classList.contains('show'))renderCard();}).catch(()=>{});
+invoke('get_qoder').then(u=>{qoderSnap=u||qoderSnap;renderRing();}).catch(()=>{});
 invoke('get_notch_slots').then(v=>{if(Array.isArray(v)){notchSlots=v;renderRing();}}).catch(()=>{});
 listen('notch_slots',e=>{
   notchSlots=Array.isArray(e.payload)?e.payload:null;
@@ -2300,6 +2564,20 @@ setInterval(async()=>{
     }
   }catch(_){} // Local IPC only; no network requests and no automatic browser launch.
 },2000);
+// The taskbar's ids name the default Claude account claude@default, where this page calls it claude
+if(CARD_ONLY){
+  const cardId=id=>id==='claude@default'?'claude':id;
+  cardShownId=window.__CODENOTCH_TASKBAR_ITEM_ID__||null;
+  hoverId=cardId(cardShownId);
+  card.classList.add('show');
+  // Every reading that redraws the rings redraws the card, which measures it again
+  const drawRings=renderRing;
+  renderRing=function(){ drawRings(); if(providers().length) renderCard(); };
+  listen('taskbar_hover_item',e=>{ cardShownId=e.payload; hoverId=cardId(cardShownId); lastCardSize=''; renderRing(); }).catch(()=>{});
+  listen('taskbar_hover_tail',e=>{ cardTail=e.payload; placeCard(); }).catch(()=>{});
+  // Holding the card open while the pointer is on it is Rust's: it also lets clicks through the
+  // empty part of the window, and a page that is let through never hears the pointer leave.
+}
 </script>
 </body>
 </html>

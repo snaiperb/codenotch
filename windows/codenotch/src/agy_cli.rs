@@ -30,6 +30,17 @@ pub fn find_agy() -> Option<PathBuf> {
     None
 }
 
+/// The copy Antigravity IDE and VS Code's extension install, and run as `--hub`. Not part of
+/// `find_agy`: an install it finds reads through the CLI alone, and this one has a live server to
+/// read from whenever Antigravity is open.
+pub fn bundled_agy() -> Option<PathBuf> {
+    bundled_agy_in(&dirs::home_dir()?)
+}
+
+fn bundled_agy_in(home: &Path) -> Option<PathBuf> {
+    Some(home.join(".gemini").join("bin").join("agy.exe")).filter(|p| p.is_file())
+}
+
 /// Helper for testing discovery in explicit directories without touching environment.
 fn find_agy_in(dirs: &[PathBuf]) -> Option<PathBuf> {
     for dir in dirs {
@@ -136,6 +147,7 @@ fn parse_quota(text: &str) -> Result<Vec<LimitWindow>, String> {
         out.push(LimitWindow {
             label: lane.map_or(short_label, String::from),
             group,
+            duration_ms: crate::antigravity::lane_duration_ms(&label),
             id: label,
             used: ((100.0 - remaining) / 100.0).clamp(0.0, 1.0),
             resets_at: Some(reset as u64),
@@ -299,6 +311,30 @@ fn quote_arg(arg: &str) -> String {
     res
 }
 
+/// When its 15-minute check is due, `agy` starts a background updater, and started from Codenotch,
+/// which has no console to lend it, that updater opens a terminal window: the flash at the first read
+/// of the day. Updating `agy` is for Antigravity and the CLI's own runs to do. It takes "true" and
+/// ignores "1".
+const NO_AUTO_UPDATE: (&str, &str) = ("AGY_CLI_DISABLE_AUTO_UPDATE", "true");
+
+/// This process's environment plus `extra`, as the sorted, double-NUL-terminated UTF-16 block
+/// `CreateProcessW` takes with `CREATE_UNICODE_ENVIRONMENT`
+#[cfg_attr(not(windows), allow(dead_code))]
+fn environment_block(vars: impl IntoIterator<Item = (String, String)>, extra: (&str, &str)) -> Vec<u16> {
+    let mut vars: Vec<(String, String)> = vars
+        .into_iter()
+        .filter(|(k, _)| !k.is_empty() && !k.eq_ignore_ascii_case(extra.0))
+        .chain(std::iter::once((extra.0.to_string(), extra.1.to_string())))
+        .collect();
+    vars.sort_by_key(|(k, _)| k.to_uppercase());
+    let mut block: Vec<u16> = vars
+        .iter()
+        .flat_map(|(k, v)| format!("{k}={v}").encode_utf16().chain(std::iter::once(0)).collect::<Vec<_>>())
+        .collect();
+    block.push(0);
+    block
+}
+
 /// Spawns a hidden process connected to a native Windows ConPTY (Pseudo Console) inside a JobObject.
 /// Drains up to 64 KB of stdout concurrently, enforces timeout, and cleans up all descendants.
 #[cfg(windows)]
@@ -324,7 +360,7 @@ fn run_cmd_conpty(
     use windows::Win32::System::Threading::{
         CreateProcessW, DeleteProcThreadAttributeList, GetExitCodeProcess,
         InitializeProcThreadAttributeList, ResumeThread, UpdateProcThreadAttribute,
-        WaitForSingleObject, CREATE_SUSPENDED,
+        WaitForSingleObject, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT,
         EXTENDED_STARTUPINFO_PRESENT, LPPROC_THREAD_ATTRIBUTE_LIST,
         PROCESS_INFORMATION, PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE, STARTUPINFOEXW,
         STARTF_USESTDHANDLES,
@@ -473,6 +509,10 @@ fn run_cmd_conpty(
     si_ex.lpAttributeList = attr_list;
 
     let mut proc_info = PROCESS_INFORMATION::default();
+    let env_u16 = environment_block(
+        std::env::vars_os().map(|(k, v)| (k.to_string_lossy().into_owned(), v.to_string_lossy().into_owned())),
+        NO_AUTO_UPDATE,
+    );
 
     let spawn_res = unsafe {
         CreateProcessW(
@@ -481,8 +521,10 @@ fn run_cmd_conpty(
             None,
             None,
             false,
-            EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED,
-            None,
+            // Not CREATE_NO_WINDOW: with it the child gets a hidden console of its own instead of the
+            // pseudoconsole, so nothing it prints is captured (test_bounded_runner_and_no_deadlock).
+            EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED | CREATE_UNICODE_ENVIRONMENT,
+            Some(env_u16.as_ptr() as *const core::ffi::c_void),
             cwd_u16.as_ref().map_or(PCWSTR::null(), |v| PCWSTR(v.as_ptr())),
             &si_ex.StartupInfo,
             &mut proc_info,
@@ -566,16 +608,58 @@ fn run_cmd_conpty(
 
 /// Executes official `agy --print /usage` via native ConPTY.
 pub fn read_quota() -> Result<Vec<LimitWindow>, String> {
-    let agy = find_agy().ok_or("Antigravity CLI is not installed")?;
+    read_quota_with(&find_agy().ok_or("Antigravity CLI is not installed")?)
+}
+
+pub fn read_quota_with(agy: &Path) -> Result<Vec<LimitWindow>, String> {
     let dir = crate::config::config_path().with_file_name("quota-work");
     std::fs::create_dir_all(&dir).map_err(|e| format!("Cannot create CLI working directory: {e}"))?;
-    let output = run_cmd_conpty(&agy, &["--sandbox", "--print-timeout", "30s", "--print", "/usage"], Some(&dir), Duration::from_secs(70))?;
+    let output = run_cmd_conpty(agy, &["--sandbox", "--print-timeout", "30s", "--print", "/usage"], Some(&dir), Duration::from_secs(70))?;
     parse_quota(&output)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unknown_cli_lane_durations_are_not_guessed() {
+        let windows = parse_quota("Quota:\nGemini Models Monthly Limit Remaining 90% 2026-10-12T01:47:23Z").unwrap();
+        assert_eq!(windows[0].duration_ms, None);
+    }
+
+
+    #[test]
+    fn agy_runs_with_its_auto_update_off_and_the_rest_of_the_environment_kept() {
+        let vars = [("Path", "C:\\bin"), ("agy_cli_disable_auto_update", "0"), ("APPDATA", "C:\\a")]
+            .map(|(k, v)| (k.to_string(), v.to_string()));
+        let block = environment_block(vars, NO_AUTO_UPDATE);
+        assert_eq!(block[block.len() - 2..], [0, 0]);
+        let text = String::from_utf16(&block[..block.len() - 2]).unwrap();
+        assert_eq!(text.split('\0').collect::<Vec<_>>(), ["AGY_CLI_DISABLE_AUTO_UPDATE=true", "APPDATA=C:\\a", "Path=C:\\bin"]);
+    }
+
+    #[test]
+    fn the_bundled_copy_is_found_under_gemini_bin() {
+        let home = std::env::temp_dir().join(format!("codenotch-agy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        assert_eq!(bundled_agy_in(&home), None);
+        let bin = home.join(".gemini").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("agy.exe"), "").unwrap();
+        assert_eq!(bundled_agy_in(&home), Some(bin.join("agy.exe")));
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    #[ignore = "Runs Antigravity's own signed-in copy; opt in for integration verification"]
+    fn live_bundled_quota() {
+        let windows = read_quota_with(&bundled_agy().expect("bundled agy")).expect("bundled quota");
+        for w in &windows {
+            println!("{:?} / {}: used {:.2}", w.group, w.label, w.used);
+        }
+        assert!(!windows.is_empty());
+    }
 
     #[test]
     fn quoted_paths_keep_backslashes() {
@@ -597,6 +681,9 @@ mod tests {
         let text = "Quota:\nGemini Models Weekly Limit Remaining 94% 2026-09-12T01:47:23Z\nGemini Models Five Hour Limit Remaining 78% 2026-09-10T06:12:31Z\nClaude and GPT models Weekly Limit Remaining 100% 2026-09-17T01:47:23Z\nClaude and GPT models Five Hour Limit Remaining 100% 2026-09-10T08:13:44Z";
         let windows = parse_quota(text).expect("valid sample quota");
         assert_eq!(windows.len(), 4);
+        assert_eq!(windows.iter().map(|w| w.duration_ms).collect::<Vec<_>>(),
+            [Some(crate::usage::FIVE_HOURS_MS), Some(crate::usage::SEVEN_DAYS_MS),
+             Some(crate::usage::FIVE_HOURS_MS), Some(crate::usage::SEVEN_DAYS_MS)]);
 
         // Grouped by model and named by lane, 5-hour first, as the Mac card shows them
         assert_eq!(windows[0].id, "Gemini Models Five Hour Limit");
@@ -810,6 +897,7 @@ mod tests {
                 label: "Gemini · Weekly".into(),
                 used: 0.06,
                 resets_at: Some(1700000000000),
+                duration_ms: Some(crate::usage::SEVEN_DAYS_MS),
                 ..Default::default()
             }],
             fetched_at: 1700000000000,
@@ -819,6 +907,8 @@ mod tests {
         assert!(save_persisted_to(&dest, &snap).is_ok());
         let read_back = std::fs::read_to_string(&dest).unwrap();
         assert!(read_back.contains("Gemini · Weekly"));
+        let restored: UsageSnapshot = serde_json::from_str(&read_back).unwrap();
+        assert_eq!(restored.windows[0].duration_ms, Some(crate::usage::SEVEN_DAYS_MS));
 
         #[cfg(windows)]
         {

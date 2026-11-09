@@ -105,6 +105,19 @@ enum Percent {
         return "\(Int(value.rounded()))"
     }
 
+    /// The same figure from the other end, for a menu bar set to read what is
+    /// left. Derived from the *rounded* used half, the rule `halves` follows,
+    /// so the bar and the tooltip under it never disagree by a point — and
+    /// with `whole`'s two guards answered from this end: a window barely
+    /// touched says ">99" rather than a full hundred, and one with a little
+    /// left says "<1" rather than "0".
+    static func wholeRemaining(for fraction: Double) -> String {
+        let value = max(0, fraction * 100)
+        if value > 0, value < 1 { return ">99" }
+        if value > 99, value < 100 { return "<1" }
+        return "\(max(0, 100 - Int(value.rounded())))"
+    }
+
     /// The share of the allowance the meters draw: spent by default, what is
     /// left when the notch is set that way. The one rule behind the ring's
     /// sweep, the card's bars, and every flipped figure — callers clamp to
@@ -589,6 +602,8 @@ struct ProviderSnapshot: Identifiable, Equatable {
         case "amp":        return L10n.t("Run amp login in Terminal to read your usage", locale: locale)
         case "apify":      return L10n.t("Run apify login in Terminal, or paste an Apify API token in Settings", locale: locale)
         case "kilo":       return L10n.t("Sign in with the Kilo CLI to read your usage", locale: locale)
+        case "higgsfield": return L10n.t("Run hf auth login in Terminal, or paste a Higgsfield API key in Settings", locale: locale)
+        case "krea":       return L10n.t("Run krea auth login in Terminal, or paste a Krea API key in Settings", locale: locale)
         // Two Ollamas, and they are stuck for different reasons: the hosted
         // one wants a key, the local one wants the daemon running.
         case "ollama":       return L10n.t("Enter an Ollama API key in Settings, or export OLLAMA_API_KEY", locale: locale)

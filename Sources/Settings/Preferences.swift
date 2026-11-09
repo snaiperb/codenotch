@@ -115,9 +115,28 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(notchVisibility.rawValue, forKey: Keys.visibility) }
     }
 
+    /// When the notch folds away automatically.
+    @Published var autoHideMode: AutoHideMode {
+        didSet {
+            defaults.set(autoHideMode.rawValue, forKey: Keys.autoHideMode)
+            defaults.set(autoHideMode != .never, forKey: Keys.foldsForFullScreen)
+            if foldsForFullScreen != (autoHideMode != .never) {
+                foldsForFullScreen = (autoHideMode != .never)
+            }
+        }
+    }
+
     /// Whether a frontmost full-screen app folds the notch away.
+    /// Synchronized with `autoHideMode` for backward compatibility.
     @Published var foldsForFullScreen: Bool {
-        didSet { defaults.set(foldsForFullScreen, forKey: Keys.foldsForFullScreen) }
+        didSet {
+            defaults.set(foldsForFullScreen, forKey: Keys.foldsForFullScreen)
+            if autoHideMode == .never && foldsForFullScreen {
+                autoHideMode = .onFullscreen
+            } else if autoHideMode != .never && !foldsForFullScreen {
+                autoHideMode = .never
+            }
+        }
     }
 
     /// Which screen edge the notch is welded to.
@@ -318,16 +337,15 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(shutRingsWhenSpent, forKey: Keys.shutRingsWhenSpent) }
     }
 
-    /// Whether the notch sorts rings by what is left instead of the manual
-    /// order: most remaining first, by the window that leads each ring. A
-    /// high number that cannot be spent yet sinks below usable accounts but
-    /// stays above empty ones; the Accounts list keeps the manual order,
-    /// which breaks ties.
+    /// In what order the notch draws its rings: the manual arrangement
+    /// dragging built, most remaining first, or quota expiring soonest
+    /// first. See `RingOrder` for why it is one choice rather than two
+    /// switches.
     ///
-    /// Off by default: the manual arrangement is what dragging built, and
-    /// re-sorting unasked would strand it.
-    @Published var autoOrderByRemaining: Bool {
-        didSet { defaults.set(autoOrderByRemaining, forKey: Keys.autoOrderByRemaining) }
+    /// Manual by default: the manual arrangement is what dragging built,
+    /// and re-sorting unasked would strand it.
+    @Published var ringOrder: RingOrder {
+        didSet { defaults.set(ringOrder.rawValue, forKey: Keys.ringOrder) }
     }
 
     /// Whether accounts with nothing left to spend leave the notch: the
@@ -427,6 +445,28 @@ final class Preferences: ObservableObject {
         didSet { defaults.set(showsWeeklyLimitInMenuBar, forKey: Keys.showsWeeklyLimitInMenuBar) }
     }
 
+    /// What a plain click on the item does. `.menu` is what it has always
+    /// done, and the menu stays a right-click away whatever is chosen: with
+    /// the app out of the Dock the menu is the only way to Settings and Quit.
+    @Published var menuBarClickAction: MenuBarClickAction {
+        didSet { defaults.set(menuBarClickAction.rawValue, forKey: Keys.menuBarClickAction) }
+    }
+
+    /// How much of each reading the item prints. `.automatic` is the rule it
+    /// has always followed — two readings with countdowns, shares alone past
+    /// that — now answerable by whoever has to live with the width.
+    @Published var menuBarReading: MenuBarReading {
+        didSet { defaults.set(menuBarReading.rawValue, forKey: Keys.menuBarReading) }
+    }
+
+    /// How the item shows that an agent is working. `.pulse` is what it has
+    /// always done, so an upgrade changes nothing; the other two exist because
+    /// movement in the menu bar is not everyone's idea of an indicator, and
+    /// stopping it used to mean turning Reduce Motion on for the whole Mac.
+    @Published var menuBarActivityStyle: MenuBarActivityStyle {
+        didSet { defaults.set(menuBarActivityStyle.rawValue, forKey: Keys.menuBarActivityStyle) }
+    }
+
     /// The providers the menu bar summarises when it does, as ids. Nil until
     /// the first choice — see `MenuBarLimits` for what that reads as. From
     /// then on it is the ones that are on, so a provider that turns up later
@@ -448,6 +488,36 @@ final class Preferences: ObservableObject {
     /// Both halves of the menu bar choice, the way the status item takes them.
     var menuBarLimits: MenuBarLimits {
         MenuBarLimits(isOn: showsLimitsInMenuBar, chosen: menuBarProviders)
+    }
+
+    /// The providers whose card in the menu is opened out, as ids.
+    ///
+    /// Closed is the base state, and closed is not nothing: the card still
+    /// carries what the limits say — the windows, their bars, the percentages,
+    /// the resets, and a block if there is one. What the switch adds is
+    /// everything the notch's tooltip carries besides: the live sessions, a
+    /// local model's readings, Codex's unused resets and account activity,
+    /// DeepSeek's usage breakdown.
+    ///
+    /// Presentation only, and per provider. Nothing here decides what is read
+    /// or how often — the same distinction `menuBarProviders` keeps.
+    @Published private(set) var expandedDetailProviders: Set<String> {
+        didSet {
+            guard expandedDetailProviders != oldValue else { return }
+            defaults.set(expandedDetailProviders.sorted(), forKey: Keys.expandedDetailProviders)
+        }
+    }
+
+    func isDetailExpanded(_ providerID: String) -> Bool {
+        expandedDetailProviders.contains(providerID)
+    }
+
+    func setDetailExpanded(_ expanded: Bool, for providerID: String) {
+        if expanded {
+            expandedDetailProviders.insert(providerID)
+        } else {
+            expandedDetailProviders.remove(providerID)
+        }
     }
 
     /// Open the notch for a few seconds when an agent stops working.
@@ -535,14 +605,103 @@ final class Preferences: ObservableObject {
         didSet {
             if let budget = geminiAPIMonthlyTokenBudget, budget > 0 {
                 defaults.set(budget, forKey: Keys.geminiAPIMonthlyTokenBudget)
+                manualPlanCeilings["gemini-api"] = budget
             } else {
                 defaults.removeObject(forKey: Keys.geminiAPIMonthlyTokenBudget)
+                manualPlanCeilings.removeValue(forKey: "gemini-api")
             }
         }
     }
 
     @Published var qoderRegion: Sites.QoderRegion {
         didSet { defaults.set(qoderRegion.rawValue, forKey: Keys.qoderRegion) }
+    }
+
+    /// Global plan ceiling determination mode.
+    @Published var planCeilingMode: PlanCeilingMode {
+        didSet { defaults.set(planCeilingMode.rawValue, forKey: Keys.planCeilingMode) }
+    }
+
+    /// Warning threshold percentage for plan ceiling alerts (default 80%).
+    @Published var ceilingWarningThreshold: Int {
+        didSet { defaults.set(ceilingWarningThreshold, forKey: Keys.ceilingWarningThreshold) }
+    }
+
+    /// Per-provider manual plan ceilings.
+    @Published var manualPlanCeilings: [String: Int] {
+        didSet {
+            if let data = try? JSONEncoder().encode(manualPlanCeilings) {
+                defaults.set(data, forKey: Keys.manualPlanCeilings)
+            }
+        }
+    }
+
+    /// Per-provider observed peak usage counts.
+    @Published var observedPeakUsage: [String: Int] {
+        didSet {
+            if let data = try? JSONEncoder().encode(observedPeakUsage) {
+                defaults.set(data, forKey: Keys.observedPeakUsage)
+            }
+        }
+    }
+
+    /// Records observed usage to update peak usage when higher.
+    func recordPeakUsage(providerID: String, used: Int) {
+        guard used > 0 else { return }
+        let current = observedPeakUsage[providerID] ?? 0
+        if used > current {
+            observedPeakUsage[providerID] = used
+        }
+    }
+
+    /// Sets or clears a manual ceiling for a provider.
+    func setManualCeiling(_ ceiling: Int?, for providerID: String) {
+        if let ceiling, ceiling > 0 {
+            manualPlanCeilings[providerID] = ceiling
+        } else {
+            manualPlanCeilings.removeValue(forKey: providerID)
+        }
+        if providerID == "gemini-api" {
+            geminiAPIMonthlyTokenBudget = ceiling
+        }
+    }
+
+    /// Calculates the effective ceiling and whether it is inferred.
+    func effectiveCeiling(for providerID: String) -> (ceiling: Int?, isInferred: Bool) {
+        let manual = manualPlanCeilings[providerID] ?? (providerID == "gemini-api" ? geminiAPIMonthlyTokenBudget : nil)
+        let peak = observedPeakUsage[providerID] ?? 0
+        let inferred = peak > 0 ? PlanCeiling.infer(from: peak) : nil
+
+        switch planCeilingMode {
+        case .manual:
+            return (manual, false)
+        case .inferred:
+            return (inferred, true)
+        case .hybrid:
+            if let manual, manual > 0 {
+                return (manual, false)
+            } else if let inferred, inferred > 0 {
+                return (inferred, true)
+            } else {
+                return (nil, false)
+            }
+        }
+    }
+
+    /// User-declared request/event limit for the manual provider.
+    @Published var manualProviderLimit: Int? {
+        didSet {
+            if let limit = manualProviderLimit, limit > 0 {
+                defaults.set(limit, forKey: Keys.manualProviderLimit)
+            } else {
+                defaults.removeObject(forKey: Keys.manualProviderLimit)
+            }
+        }
+    }
+
+    /// Reset window schedule identifier for the manual provider.
+    @Published var manualProviderSchedule: String {
+        didSet { defaults.set(manualProviderSchedule, forKey: Keys.manualProviderSchedule) }
     }
 
     /// Which MiniMax console the Coding Plan is read from.
@@ -594,12 +753,17 @@ final class Preferences: ObservableObject {
         static let accountNicknames = "accountNicknames"
         static let hasLaunched = "hasLaunchedBefore"
         static let visibility = "notchVisibility"
+        static let autoHideMode = "autoHideMode"
         static let foldsForFullScreen = "foldsForFullScreen"
         static let presence = "appPresence"
         static let notificationChannel = "notificationChannel"
         static let showsLimitsInMenuBar = "showsLimitsInMenuBar"
         static let showsWeeklyLimitInMenuBar = "showsWeeklyLimitInMenuBar"
+        static let menuBarActivityStyle = "menuBarActivityStyle"
+        static let menuBarReading = "menuBarReading"
+        static let menuBarClickAction = "menuBarClickAction"
         static let menuBarProviders = "menuBarProviders"
+        static let expandedDetailProviders = "expandedDetailProviders"
         static let edge = "notchEdge"
         // A new key, so there is nothing under the old app name to migrate.
         static let size = "notchSize"
@@ -617,6 +781,8 @@ final class Preferences: ObservableObject {
         static let weeklyReading = "weeklyReading"
         static let shutRingsWhenSpent = "shutRingsWhenSpent"
         static let autoOrderByRemaining = "autoOrderByRemaining"
+        static let autoOrderByDeficit = "autoOrderByDeficit"
+        static let ringOrder = "ringOrder"
         static let hideDepletedAccounts = "hideDepletedAccounts"
         static let claudeDailyPaceRing = "claudeDailyPaceRing"
         static let weeklyHeadline = "weeklyHeadline"
@@ -647,6 +813,8 @@ final class Preferences: ObservableObject {
         static let limitReachedSoundName = "limitReachedSoundName"
         /// A new key, so there is nothing under the old app name to migrate.
         static let geminiAPIMonthlyTokenBudget = "geminiAPIMonthlyTokenBudget"
+        static let manualProviderLimit = "manualProviderLimit"
+        static let manualProviderSchedule = "manualProviderSchedule"
         static let minimaxRegion = "minimaxRegion"
         static let qoderRegion = "qoderRegion"
         static let antigravityHeadlineLimit = "antigravityHeadlineLimit"
@@ -654,6 +822,10 @@ final class Preferences: ObservableObject {
         static let deepSeekPricingEnabled = "deepSeekPricingEnabled"
         static let deepSeekPricingSchedule = "deepSeekPricingSchedule"
         static let showCodexExtraLimits = "showCodexExtraLimits"
+        static let planCeilingMode = "planCeilingMode"
+        static let ceilingWarningThreshold = "ceilingWarningThreshold"
+        static let manualPlanCeilings = "manualPlanCeilings"
+        static let observedPeakUsage = "observedPeakUsage"
     }
 
     /// The budget read straight from disk, off the main actor.
@@ -666,8 +838,75 @@ final class Preferences: ObservableObject {
     ) -> Int? {
         guard let budget = defaults.object(forKey: Keys.geminiAPIMonthlyTokenBudget) as? Int,
               budget > 0
-        else { return nil }
+        else {
+            // Also check manualPlanCeilings in case it was stored there
+            let dict = storedManualPlanCeilings(defaults: defaults)
+            if let budget = dict["gemini-api"], budget > 0 { return budget }
+            return nil
+        }
         return budget
+    }
+
+    nonisolated static func storedPlanCeilingMode(defaults: UserDefaults = .standard) -> PlanCeilingMode {
+        guard let raw = defaults.string(forKey: Keys.planCeilingMode),
+              let mode = PlanCeilingMode(rawValue: raw)
+        else { return .hybrid }
+        return mode
+    }
+
+    nonisolated static func storedCeilingWarningThreshold(defaults: UserDefaults = .standard) -> Int {
+        let threshold = defaults.integer(forKey: Keys.ceilingWarningThreshold)
+        return threshold > 0 ? threshold : 80
+    }
+
+    nonisolated static func storedManualPlanCeilings(defaults: UserDefaults = .standard) -> [String: Int] {
+        guard let data = defaults.data(forKey: Keys.manualPlanCeilings),
+              let dict = try? JSONDecoder().decode([String: Int].self, from: data)
+        else { return [:] }
+        return dict
+    }
+
+    nonisolated static func storedObservedPeakUsage(defaults: UserDefaults = .standard) -> [String: Int] {
+        guard let data = defaults.data(forKey: Keys.observedPeakUsage),
+              let dict = try? JSONDecoder().decode([String: Int].self, from: data)
+        else { return [:] }
+        return dict
+    }
+
+    nonisolated static func storedEffectiveCeiling(for providerID: String, defaults: UserDefaults = .standard) -> Int? {
+        let mode = storedPlanCeilingMode(defaults: defaults)
+        let manualDict = storedManualPlanCeilings(defaults: defaults)
+        let manual = manualDict[providerID] ?? (providerID == "gemini-api" ? storedGeminiAPIMonthlyTokenBudget(defaults: defaults) : nil)
+        let peaks = storedObservedPeakUsage(defaults: defaults)
+        let peak = peaks[providerID] ?? 0
+        let inferred = peak > 0 ? PlanCeiling.infer(from: peak) : nil
+
+        switch mode {
+        case .manual:
+            return manual
+        case .inferred:
+            return inferred
+        case .hybrid:
+            return (manual != nil && manual! > 0) ? manual : inferred
+        }
+    }
+
+    nonisolated static func storedManualProviderLimit(
+        defaults: UserDefaults = .standard
+    ) -> Int? {
+        guard let limit = defaults.object(forKey: Keys.manualProviderLimit) as? Int,
+              limit > 0
+        else { return nil }
+        return limit
+    }
+
+    nonisolated static func storedManualProviderSchedule(
+        defaults: UserDefaults = .standard
+    ) -> ManualResetSchedule {
+        guard let raw = defaults.string(forKey: Keys.manualProviderSchedule),
+              let schedule = ManualResetSchedule.from(identifier: raw)
+        else { return .interval(3 * 3600) }
+        return schedule
     }
     
     nonisolated static func storedAntigravityHeadlineLimit(
@@ -914,9 +1153,13 @@ final class Preferences: ObservableObject {
         // like it failed to start.
         self.notchVisibility = defaults.string(forKey: Keys.visibility)
             .flatMap(NotchVisibility.init(rawValue:)) ?? .onHover
-        // Absent means the fold that has shipped since full-screen detection
-        // exists — the setting silences it, it does not introduce it.
-        self.foldsForFullScreen = defaults.object(forKey: Keys.foldsForFullScreen) as? Bool ?? true
+        // Auto-hide mode: defaults to .onFullscreen, preserving any legacy foldsForFullScreen choice.
+        let storedAutoHide = defaults.string(forKey: Keys.autoHideMode)
+            .flatMap(AutoHideMode.init(rawValue:))
+        let legacyFolds = defaults.object(forKey: Keys.foldsForFullScreen) as? Bool
+        let resolvedAutoHide = storedAutoHide ?? (legacyFolds.map { $0 ? .onFullscreen : .never } ?? .onFullscreen)
+        self.autoHideMode = resolvedAutoHide
+        self.foldsForFullScreen = resolvedAutoHide != .never
         // Absent means never chosen. The Dock is the default because it is the
         // findable one — a new user who cannot see the app anywhere has no way
         // to learn it is running.
@@ -932,8 +1175,17 @@ final class Preferences: ObservableObject {
         // Absent means an install from before this option, which must retain
         // its existing compact status-item presentation.
         self.showsWeeklyLimitInMenuBar = defaults.bool(forKey: Keys.showsWeeklyLimitInMenuBar)
+        self.menuBarActivityStyle = defaults.string(forKey: Keys.menuBarActivityStyle)
+            .flatMap(MenuBarActivityStyle.init(rawValue:)) ?? .pulse
+        self.menuBarReading = defaults.string(forKey: Keys.menuBarReading)
+            .flatMap(MenuBarReading.init(rawValue:)) ?? .automatic
+        self.menuBarClickAction = defaults.string(forKey: Keys.menuBarClickAction)
+            .flatMap(MenuBarClickAction.init(rawValue:)) ?? .menu
         // Absent is kept distinct from empty: never chosen is not choosing none.
         self.menuBarProviders = defaults.stringArray(forKey: Keys.menuBarProviders).map(Set.init)
+        self.expandedDetailProviders = Set(
+            defaults.stringArray(forKey: Keys.expandedDetailProviders) ?? []
+        )
         // The right edge is where the notch has always been, and it is the one
         // side of a Mac that no system chrome claims by default.
         self.notchEdge = defaults.string(forKey: Keys.edge)
@@ -990,7 +1242,11 @@ final class Preferences: ObservableObject {
         // choice for whoever budgets from the other end.
         self.showsRemainingInNotch = defaults.bool(forKey: Self.showsRemainingInNotchKey)
         self.shutRingsWhenSpent = defaults.object(forKey: Keys.shutRingsWhenSpent) as? Bool ?? true
-        self.autoOrderByRemaining = defaults.bool(forKey: Keys.autoOrderByRemaining)
+        self.ringOrder = defaults.string(forKey: Keys.ringOrder).flatMap(RingOrder.init(rawValue:))
+            // Migrated once from the two switches, which could both be on —
+            // the deficit sort won then too, so it wins the migration.
+            ?? (defaults.bool(forKey: Keys.autoOrderByDeficit) ? .deficit
+                : defaults.bool(forKey: Keys.autoOrderByRemaining) ? .remaining : .manual)
         self.hideDepletedAccounts = defaults.bool(forKey: Keys.hideDepletedAccounts)
 
         self.weeklyRing = defaults.string(forKey: Keys.weeklyRing)
@@ -1041,6 +1297,12 @@ final class Preferences: ObservableObject {
         self.limitReachedSoundName = defaults.string(forKey: Keys.limitReachedSoundName)
             ?? SessionChime.defaultBlocked
         self.geminiAPIMonthlyTokenBudget = Self.storedGeminiAPIMonthlyTokenBudget(defaults: defaults)
+        self.planCeilingMode = Self.storedPlanCeilingMode(defaults: defaults)
+        self.ceilingWarningThreshold = Self.storedCeilingWarningThreshold(defaults: defaults)
+        self.manualPlanCeilings = Self.storedManualPlanCeilings(defaults: defaults)
+        self.observedPeakUsage = Self.storedObservedPeakUsage(defaults: defaults)
+        self.manualProviderLimit = Self.storedManualProviderLimit(defaults: defaults)
+        self.manualProviderSchedule = defaults.string(forKey: Keys.manualProviderSchedule) ?? "3h"
         self.minimaxRegion = Self.storedMinimaxRegion(defaults: defaults)
         self.qoderRegion = Sites.QoderRegion(rawValue: defaults.string(forKey: Keys.qoderRegion) ?? "") ?? .global
         if let data = defaults.data(forKey: Keys.customEndpoints),
